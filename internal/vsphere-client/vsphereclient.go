@@ -11,10 +11,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/shlex"
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-hclog"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
+	"github.com/vmware/govmomi/guest"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/property"
 	"github.com/vmware/govmomi/task"
@@ -42,19 +44,30 @@ type CloneType string
 
 type ClientOption func(ctx context.Context, c *client, finder *find.Finder) error
 
+// GuestCommand provides a normalized form to represent guest commands to the client
+type GuestCommand struct {
+	Username         string
+	Password         string
+	Exe              string
+	Args             []string
+	WorkingDirectory string
+	EnvVars          map[string]string
+}
+
 type client struct {
-	client             *govmomi.Client
-	datacenter         types.ManagedObjectReference
-	pool               types.ManagedObjectReference
-	host               *types.ManagedObjectReference
-	datastore          types.ManagedObjectReference
-	folder             types.ManagedObjectReference
-	template           types.ManagedObjectReference
-	namePrefix         string
-	cloneType          CloneType
-	snapshotName       string
-	snapshot           *types.ManagedObjectReference
-	guestRebootOnClone bool
+	client                 *govmomi.Client
+	datacenter             types.ManagedObjectReference
+	pool                   types.ManagedObjectReference
+	host                   *types.ManagedObjectReference
+	datastore              types.ManagedObjectReference
+	folder                 types.ManagedObjectReference
+	template               types.ManagedObjectReference
+	namePrefix             string
+	cloneType              CloneType
+	snapshotName           string
+	snapshot               *types.ManagedObjectReference
+	guestRebootOnClone     bool
+	guestCommandAfterClone *GuestCommand
 
 	// snapshotMtx protects some internal variable modifications
 	snapshotMtx *sync.Mutex
@@ -257,6 +270,28 @@ func WithInstantClone() ClientOption {
 func WithGuestReboot() ClientOption {
 	return func(ctx context.Context, c *client, finder *find.Finder) error {
 		c.guestRebootOnClone = true
+		return nil
+	}
+}
+
+func WithGuestCommandAfterClone(username string, password string, command string) ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		commands, err := shlex.Split(command)
+		if err != nil {
+			return err
+		}
+
+		if len(commands) == 0 {
+			return errors.New("guest command cannot be 0-length")
+		}
+
+		// Note: no support for working directory or anything else at the moment.
+		c.guestCommandAfterClone = &GuestCommand{
+			Username: username,
+			Password: password,
+			Exe:      commands[0],
+			Args:     commands[1:],
+		}
 		return nil
 	}
 }
@@ -622,6 +657,40 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 			return targetName, fmt.Errorf("failed to wait for VM '%s' network configuration: %w", targetName, err)
 		}
 
+		operationsManager := guest.NewOperationsManager(c.client.Client, clonedVM.Reference())
+
+		// If requested then run a guest command on the clone
+		if c.guestCommandAfterClone != nil {
+			processManager, err := operationsManager.ProcessManager(ctx)
+			if err != nil {
+				return targetName, fmt.Errorf("could not get process manager for VM '%s': %w", err)
+			}
+			envVars := []string{}
+			if c.guestCommandAfterClone.EnvVars != nil {
+				for key, value := range c.guestCommandAfterClone.EnvVars {
+					envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
+				}
+			}
+
+			spec := types.GuestProgramSpec{
+				ProgramPath:      c.guestCommandAfterClone.Exe,
+				Arguments:        strings.Join(c.guestCommandAfterClone.Args, " "),
+				WorkingDirectory: c.guestCommandAfterClone.WorkingDirectory,
+				EnvVariables:     envVars,
+			}
+			auth := types.NamePasswordAuthentication{
+				GuestAuthentication: types.GuestAuthentication{
+					InteractiveSession: false,
+				},
+				Username: c.guestCommandAfterClone.Username,
+				Password: c.guestCommandAfterClone.Password,
+			}
+			if _, err := processManager.StartProgram(ctx, &auth, &spec); err != nil {
+				return targetName, fmt.Errorf("could not run guest command for VM '%s': %w", err)
+			}
+		}
+
+		// If requested then request a guest reboot on the clone
 		if c.guestRebootOnClone {
 			if err := c.guestRebootVM(ctx, clonedVM.Reference(), targetName); err != nil {
 				return targetName, err

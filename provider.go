@@ -32,10 +32,17 @@ type InstanceGroup struct {
 	CloneType          vsphereclient.CloneType `json:"clone_type"`
 	Snapshot           string                  `json:"snapshot"`
 	Name               string                  `json:"name"`
-	// RebootOnClone applies only to instant-clones and prompts for the VM to
+	// GuestRebootAfterClone applies only to instant-clones and prompts for the VM to
 	// request a guest OS reboot after cloning. This can be useful for resetting
 	// Cloud-Init.
-	RebootOnClone bool `json:"reboot_on_clone"`
+	GuestRebootAfterClone bool `json:"guest_reboot_after_clone"`
+	// GuestCommandAfterClone applies only to instant-clones and is executed
+	// before a reboot. It will use guest-tools to delete cloud init data from
+	// well-known locations. This effectively resets cloud-init so it will rerun
+	// properly after the boot.
+	GuestCommandAfterClone string `json:"guest_command_after_clone"`
+	GuestUsername          string `json:"guest_username"`
+	GuestPassword          string `json:"guest_password"`
 
 	// TODO: add support for an optional "cloud-init mutation hook" so we can
 	// modify cloud-init.
@@ -91,6 +98,14 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 		options = append(options, vsphereclient.WithInstantClone())
 	default:
 		return provider.ProviderInfo{}, fmt.Errorf("unhandled clone type %q", g.CloneType)
+	}
+
+	if g.GuestRebootAfterClone {
+		options = append(options, vsphereclient.WithGuestReboot())
+	}
+
+	if g.GuestCommandAfterClone != "" {
+		options = append(options, vsphereclient.WithGuestCommandAfterClone(g.GuestUsername, g.GuestPassword, g.GuestCommandAfterClone))
 	}
 
 	client, err := newClient(ctx, g.VsphereUrl, g.InsecureConnection, g.Template, g.Username, g.Password, options...)
