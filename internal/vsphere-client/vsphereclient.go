@@ -1,3 +1,4 @@
+//go:generate go tool go-enum --marshal --names --values
 package vsphereclient
 
 import (
@@ -16,6 +17,8 @@ import (
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/property"
+	"github.com/vmware/govmomi/task"
+	"github.com/vmware/govmomi/vim25/json"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 	"gitlab.com/gitlab-org/fleeting/fleeting/provider"
@@ -29,6 +32,14 @@ type Client interface {
 	GuestOs(ctx context.Context) (string, error)
 }
 
+// CloneType specifies the type of clone to make
+// ENUM(
+// full,
+// linked,
+// instant,
+// )
+type CloneType string
+
 type ClientOption func(ctx context.Context, c *client, finder *find.Finder) error
 
 type client struct {
@@ -40,9 +51,12 @@ type client struct {
 	folder       types.ManagedObjectReference
 	template     types.ManagedObjectReference
 	namePrefix   string
-	linkedClone  bool
+	cloneType    CloneType
 	snapshotName string
 	snapshot     *types.ManagedObjectReference
+
+	// snapshotMtx protects some internal variable modifications
+	snapshotMtx *sync.Mutex
 }
 
 func NewClient(ctx context.Context, vsphereUrl string, insecure bool, template string, username string, password string, options ...ClientOption) (Client, error) {
@@ -59,7 +73,9 @@ func NewClient(ctx context.Context, vsphereUrl string, insecure bool, template s
 	finder := find.NewFinder(gc.Client)
 
 	c := client{
-		client: gc,
+		client:      gc,
+		cloneType:   CloneTypeFull, // default clone type
+		snapshotMtx: new(sync.Mutex),
 	}
 
 	for _, option := range options {
@@ -89,20 +105,36 @@ func NewClient(ctx context.Context, vsphereUrl string, insecure bool, template s
 	if err != nil {
 		return nil, fmt.Errorf("failed to confirm %s is a template: %w", template, err)
 	}
-	if c.linkedClone && isTemplate {
-		return nil, fmt.Errorf("linked clone requires a VM with snapshots, but %s is a template", template)
-	}
-	if !c.linkedClone && !isTemplate {
-		return nil, fmt.Errorf("%s should be a template", template)
-	}
+
 	c.template = templateVM.Reference()
 
-	if c.linkedClone {
-		snapshot, err := c.resolveSnapshot(ctx, c.template)
-		if err != nil {
+	switch c.cloneType {
+	case CloneTypeFull:
+		if !isTemplate {
+			return nil, fmt.Errorf("%s should be a template", template)
+		}
+	case CloneTypeLinked:
+		if isTemplate {
+			return nil, fmt.Errorf("linked clone requires a VM with snapshots, but %s is a template", template)
+		}
+		// Initially resolve the template. If the template isn't found at VM launch time, this will be recalled
+		// at that time.
+		if err := c.resolveSnapshot(ctx, c.template); err != nil {
 			return nil, err
 		}
-		c.snapshot = snapshot
+	case CloneTypeInstant:
+		if isTemplate {
+			return nil, fmt.Errorf("instant clone requires a running VM but %s is a template", template)
+		}
+		if powerState, err := templateVM.PowerState(ctx); err != nil {
+			return nil, fmt.Errorf("failed to determine power state of %s VM: %w", template, err)
+		} else if powerState != types.VirtualMachinePowerStatePoweredOn {
+			// This is not a reliable check, but for most users it should catch that they're asking for a situation
+			// that can't be accomodated. Obviously you could just power off the target VM at anytime.
+			return nil, fmt.Errorf("instant clone requires a running VM but %s is a power state of %s", template, powerState)
+		}
+	default:
+		return nil, fmt.Errorf("unknown clone type %s", c.cloneType)
 	}
 
 	if c.folder == (types.ManagedObjectReference{}) {
@@ -208,8 +240,15 @@ func WithVMNamePrefix(prefix string) ClientOption {
 
 func WithLinkedClone(snapshotName string) ClientOption {
 	return func(ctx context.Context, c *client, finder *find.Finder) error {
-		c.linkedClone = true
+		c.cloneType = CloneTypeLinked
 		c.snapshotName = snapshotName
+		return nil
+	}
+}
+
+func WithInstantClone() ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		c.cloneType = CloneTypeInstant
 		return nil
 	}
 }
@@ -379,33 +418,117 @@ func (c *client) DeleteVMs(ctx context.Context, vmNames []string, log hclog.Logg
 	return deletedVms, nil
 }
 
-func (c *client) templateClone(ctx context.Context, src types.ManagedObjectReference, config *types.VirtualMachineConfigSpec) (string, error) {
-	spec := types.VirtualMachineCloneSpec{
-		Location: types.VirtualMachineRelocateSpec{
-			Folder:    &c.folder,
-			Pool:      &c.pool,
-			Host:      c.host,
-			Datastore: &c.datastore,
-		},
-		Config:   config,
-		PowerOn:  false, // This field is ignored when cloning from a template
-		Template: false,
+func (c *client) templateClone(ctx context.Context, src types.ManagedObjectReference, config *types.VirtualMachineConfigSpec) (targetName string, err error) {
+	// Rewrite task errors so they print more useful information by JSON marshalling them
+	// (which exposes it).
+	defer func() {
+		if taskError, ok := errors.AsType[task.Error](err); ok {
+			encoded, _ := json.Marshal(taskError)
+			err = errors.Join(err, fmt.Errorf("task error: %v", string(encoded)))
+		}
+	}()
+
+	if !c.cloneType.IsValid() {
+		return "", fmt.Errorf("unknown clone type: %s", c.cloneType)
 	}
 
-	if c.linkedClone {
-		spec.Snapshot = c.snapshot
-		spec.Location.DiskMoveType = string(types.VirtualMachineRelocateDiskMoveOptionsCreateNewChildDiskBacking)
-	}
 	srcVM := object.NewVirtualMachine(c.client.Client, src)
 
-	id := uuid.New()
-	targetName := fmt.Sprintf("%s-%s", c.namePrefix, id)
+	// Use UUIDv7 to get temporal sorting.
+	var id uuid.UUID
+	id, err = uuid.NewV7()
+	if err != nil {
+		return "", fmt.Errorf("error generating UUID: %w, err")
+	}
+	targetName = fmt.Sprintf("%s-%s", c.namePrefix, id)
 
 	folder := object.NewFolder(c.client.Client, c.folder)
 
-	task, err := srcVM.Clone(ctx, folder, targetName, spec)
-	if err != nil {
-		return "", fmt.Errorf("failed to clone VM from template: %w", err)
+	var task *object.Task
+
+	vmLocation := types.VirtualMachineRelocateSpec{
+		Folder:    &c.folder,
+		Pool:      &c.pool,
+		Host:      c.host,
+		Datastore: &c.datastore,
+	}
+
+	// Instant clones are special
+	if c.cloneType == CloneTypeInstant {
+		// TODO: should support cloning the VM into another network.
+		// The instant clone needs to be made with a disabled network card otherwise it would
+		// immediately just fail. Mark all network cards as disconnected on the clone.
+		var devices object.VirtualDeviceList
+		devices, err = srcVM.Device(ctx)
+		if err != nil {
+			return "", fmt.Errorf("failed to get device list of template VM: %w", err)
+		}
+		// prepare virtual device config spec for network card
+		configSpecs := []types.BaseVirtualDeviceConfigSpec{}
+		for _, device := range devices {
+			if card, ok := device.(types.BaseVirtualEthernetCard); ok {
+				op := types.VirtualDeviceConfigSpecOperationEdit
+
+				// Disconnect the network device on the instant cloned VM.
+				// We must reconnect it below so it can adopt a new MAC address.
+				// For safety we also set MAC address assignment to automatic.
+				veth := card.GetVirtualEthernetCard()
+				veth.Connectable.MigrateConnect = string(types.VirtualDeviceConnectInfoMigrateConnectOpDisconnect)
+				veth.AddressType = string(types.VirtualEthernetCardMacTypeGenerated)
+
+				configSpecs = append(configSpecs, &types.VirtualDeviceConfigSpec{
+					Operation: op,
+					Device:    veth,
+				})
+			}
+		}
+
+		vmLocation.DeviceChange = configSpecs
+
+		instantcloneSpec := &types.VirtualMachineInstantCloneSpec{
+			Name:     targetName,
+			Location: vmLocation,
+			// This will simply be the cloud-init data. Theoretically we can in fact process that
+			// in the clone, but at the very least making it available lets scripts and other tools
+			// detect it.
+			Config: config.ExtraConfig,
+		}
+
+		task, err = srcVM.InstantClone(ctx, *instantcloneSpec)
+		if err != nil {
+			return "", fmt.Errorf("failed to instant clone VM: %w", err)
+		}
+	} else {
+		spec := types.VirtualMachineCloneSpec{
+			Location: vmLocation,
+			Config:   config,
+			PowerOn:  false, // This field is ignored when cloning from a template
+			Template: false,
+		}
+
+		if c.cloneType == CloneTypeLinked {
+			spec.Snapshot = c.getSnapshot()
+			spec.Location.DiskMoveType = string(types.VirtualMachineRelocateDiskMoveOptionsCreateNewChildDiskBacking)
+		}
+
+		// HACK: if we're a linked clone and we fail, we want to try re-resolving the snapshot before actually failing.
+		// This is being done this way because I don't currently know exactly what the error looks like.
+		secondChance := false
+		for {
+			task, err = srcVM.Clone(ctx, folder, targetName, spec)
+			if err != nil {
+				if spec.Snapshot != nil && !secondChance {
+					secondChance = true
+					if serr := c.resolveSnapshot(ctx, c.template); serr != nil {
+						return "", fmt.Errorf("failed to clone VM from template: %w\nsnapshot re-resolution failed: %w", err, serr)
+					}
+					continue // Try a second time after re-resolving the snapshot
+				}
+				return "", fmt.Errorf("failed to clone VM from template: %w", err)
+			}
+			// Success - process.
+			break
+		}
 	}
 
 	err = task.Wait(ctx)
@@ -414,6 +537,7 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 	}
 
 	var folderProps mo.Folder
+	// TODO: check if a useful error appears here.
 	folder.Properties(ctx, folder.Reference(), []string{"childEntity"}, &folderProps)
 
 	var clonedVM *object.VirtualMachine
@@ -438,35 +562,101 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 		return targetName, fmt.Errorf("failed to find the newly cloned VM '%s'", targetName)
 	}
 
-	if err := c.powerOnVM(ctx, clonedVM.Reference(), targetName); err != nil {
-		if derr := c.deleteVM(ctx, clonedVM.Reference(), targetName); derr != nil {
-			return targetName, derr
+	// Got the cloned VM at this point. Defer deleting if we have an error...
+	defer func() {
+		if clonedVM != nil && err != nil {
+			if derr := c.deleteVM(ctx, clonedVM.Reference(), targetName); derr != nil {
+				// Return the delete error as a priority instead
+				err = derr
+			}
+		}
+	}()
+
+	// Power on the VM unless it was an instant clone (in which case it's already running)
+	switch c.cloneType {
+	case CloneTypeInstant:
+		// TODO: consider providing the option to just reboot the instant clone immediately.
+		// TODO: consider moving this to it's own function
+		// The instant clone is performed by disconnecting the guest network. We must re-enable it
+		// here so the machine can re-DHCP. Whatever template is being used needs to handle this
+		// situation properly.
+		// Reference: https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere-sdks-tools/8-0/web-services-sdk-programming-guide/virtual-machine-management/linked-virtual-machines/instant-clone-virtual-machines/avoiding-network-identity-collisions-after-instant-clone-operations.html
+		var devices object.VirtualDeviceList
+		devices, err = srcVM.Device(ctx)
+		if err != nil {
+			return "", fmt.Errorf("failed to get device list of cloned VM: '%v': %w", targetName, err)
 		}
 
-		return targetName, err
+		// prepare virtual device config spec for network card
+		configSpecs := []types.BaseVirtualDeviceConfigSpec{}
+		for _, device := range devices {
+			if card, ok := device.(types.BaseVirtualEthernetCard); ok {
+				op := types.VirtualDeviceConfigSpecOperationEdit
+				// Reconnect all network devices on the clone.
+				veth := card.GetVirtualEthernetCard()
+				veth.Connectable.Connected = true
+
+				configSpecs = append(configSpecs, &types.VirtualDeviceConfigSpec{
+					Operation: op,
+					Device:    veth,
+				})
+			}
+		}
+
+		task, err = clonedVM.Relocate(ctx, types.VirtualMachineRelocateSpec{
+			DeviceChange: configSpecs,
+		}, types.VirtualMachineMovePriorityDefaultPriority)
+		if err != nil {
+			return targetName, fmt.Errorf("failed to relocate VM to re-enable network '%s': %w", targetName, err)
+		}
+		err = task.Wait(ctx)
+		if err != nil {
+			return targetName, fmt.Errorf("failed to wait for VM '%s' network configuration: %w", targetName, err)
+		}
+	default:
+		if err := c.powerOnVM(ctx, clonedVM.Reference(), targetName); err != nil {
+			return targetName, err
+		}
 	}
 
 	return targetName, nil
 }
 
-func (c *client) resolveSnapshot(ctx context.Context, vmRef types.ManagedObjectReference) (*types.ManagedObjectReference, error) {
+// getSnapshot provides a common wrapper for synchronized access to the current snapshot
+func (c *client) getSnapshot() *types.ManagedObjectReference {
+	c.snapshotMtx.Lock()
+	defer c.snapshotMtx.Unlock()
+
+	return c.snapshot
+}
+
+// getSnapshot provides a common wrapper for synchronized access to the current snapshot
+func (c *client) setSnapshot(snapshot *types.ManagedObjectReference) {
+	c.snapshotMtx.Lock()
+	defer c.snapshotMtx.Unlock()
+
+	c.snapshot = snapshot
+}
+
+func (c *client) resolveSnapshot(ctx context.Context, vmRef types.ManagedObjectReference) error {
 	vm := object.NewVirtualMachine(c.client.Client, vmRef)
 
 	var vmMo mo.VirtualMachine
 	err := vm.Properties(ctx, vm.Reference(), []string{"snapshot"}, &vmMo)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve snapshot info: %w", err)
+		return fmt.Errorf("failed to retrieve snapshot info: %w", err)
 	}
 
 	if vmMo.Snapshot == nil {
-		return nil, fmt.Errorf("linked clone requires the source VM to have at least one snapshot")
+		return fmt.Errorf("linked clone requires the source VM to have at least one snapshot")
 	}
 
 	if c.snapshotName == "" {
 		if vmMo.Snapshot.CurrentSnapshot == nil {
-			return nil, fmt.Errorf("no current snapshot found on source VM")
+			return fmt.Errorf("no current snapshot found on source VM")
 		}
-		return vmMo.Snapshot.CurrentSnapshot, nil
+		c.setSnapshot(vmMo.Snapshot.CurrentSnapshot)
+		return nil
 	}
 
 	queue := vmMo.Snapshot.RootSnapshotList
@@ -475,12 +665,13 @@ func (c *client) resolveSnapshot(ctx context.Context, vmRef types.ManagedObjectR
 		queue = queue[1:]
 		if s.Name == c.snapshotName {
 			ref := s.Snapshot
-			return &ref, nil
+			c.setSnapshot(&ref)
+			return nil
 		}
 		queue = append(queue, s.ChildSnapshotList...)
 	}
 
-	return nil, fmt.Errorf("snapshot '%s' not found on source VM", c.snapshotName)
+	return fmt.Errorf("snapshot '%s' not found on source VM", c.snapshotName)
 }
 
 func (c *client) powerOnVM(ctx context.Context, vmMOR types.ManagedObjectReference, vmName string) error {

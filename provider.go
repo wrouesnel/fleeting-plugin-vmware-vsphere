@@ -19,19 +19,30 @@ var _ provider.InstanceGroup = (*InstanceGroup)(nil)
 var newClient = vsphereclient.NewClient
 
 type InstanceGroup struct {
-	VsphereUrl         string `json:"vsphere_url"`
-	Username           string `json:"username"`
-	Password           string `json:"password"`
-	Template           string `json:"template"`
-	Folder             string `json:"folder"`
-	Datacenter         string `json:"datacenter"`
-	Host               string `json:"host"`
-	Datastore          string `json:"datastore"`
-	ResourcePool       string `json:"resource_pool"`
-	InsecureConnection bool   `json:"allow_insecure_connection"`
-	LinkedClone        bool   `json:"linked_clone"`
-	Snapshot           string `json:"snapshot"`
-	Name               string `json:"name"`
+	VsphereUrl         string                  `json:"vsphere_url"`
+	Username           string                  `json:"username"`
+	Password           string                  `json:"password"`
+	Template           string                  `json:"template"`
+	Folder             string                  `json:"folder"`
+	Datacenter         string                  `json:"datacenter"`
+	Host               string                  `json:"host"`
+	Datastore          string                  `json:"datastore"`
+	ResourcePool       string                  `json:"resource_pool"`
+	InsecureConnection bool                    `json:"allow_insecure_connection"`
+	CloneType          vsphereclient.CloneType `json:"clone_type"`
+	Snapshot           string                  `json:"snapshot"`
+	Name               string                  `json:"name"`
+
+	// TODO: add support for an optional "cloud-init mutation hook" so we can
+	// modify cloud-init.
+	// CloudInitMutationHook string `json:"cloud_init_mutation_hook"`
+
+	// TODO: add support for pre-/post- action hook scripts which receive VM info.
+	// This would be how we can support things like dynamic monitoring easily.
+	//PreStartScript     string `json:"pre_start_script"`
+	//PostStartScript    string `json:"post_start_script"`
+	//PreShutdownScript  string `json:"pre_shutdown_script"`
+	//PostShutdownScript string `json:"post_shutdown_script"`
 
 	size     uint
 	client   vsphereclient.Client
@@ -67,8 +78,15 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 	// Name is required
 	options = append(options, vsphereclient.WithVMNamePrefix(g.Name))
 
-	if g.LinkedClone {
+	switch g.CloneType {
+	case vsphereclient.CloneTypeFull:
+		// No option change needed for full clone.
+	case vsphereclient.CloneTypeLinked:
 		options = append(options, vsphereclient.WithLinkedClone(g.Snapshot))
+	case vsphereclient.CloneTypeInstant:
+		options = append(options, vsphereclient.WithInstantClone())
+	default:
+		return provider.ProviderInfo{}, fmt.Errorf("unhandled clone type %q", g.CloneType)
 	}
 
 	client, err := newClient(ctx, g.VsphereUrl, g.InsecureConnection, g.Template, g.Username, g.Password, options...)
