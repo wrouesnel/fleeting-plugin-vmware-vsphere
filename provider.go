@@ -32,6 +32,10 @@ type InstanceGroup struct {
 	CloneType          vsphereclient.CloneType `json:"clone_type"`
 	Snapshot           string                  `json:"snapshot"`
 	Name               string                  `json:"name"`
+	// RebootOnClone applies only to instant-clones and prompts for the VM to
+	// request a guest OS reboot after cloning. This can be useful for resetting
+	// Cloud-Init.
+	RebootOnClone bool `json:"reboot_on_clone"`
 
 	// TODO: add support for an optional "cloud-init mutation hook" so we can
 	// modify cloud-init.

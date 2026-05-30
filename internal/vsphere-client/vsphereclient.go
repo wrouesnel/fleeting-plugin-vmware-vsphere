@@ -43,17 +43,18 @@ type CloneType string
 type ClientOption func(ctx context.Context, c *client, finder *find.Finder) error
 
 type client struct {
-	client       *govmomi.Client
-	datacenter   types.ManagedObjectReference
-	pool         types.ManagedObjectReference
-	host         *types.ManagedObjectReference
-	datastore    types.ManagedObjectReference
-	folder       types.ManagedObjectReference
-	template     types.ManagedObjectReference
-	namePrefix   string
-	cloneType    CloneType
-	snapshotName string
-	snapshot     *types.ManagedObjectReference
+	client             *govmomi.Client
+	datacenter         types.ManagedObjectReference
+	pool               types.ManagedObjectReference
+	host               *types.ManagedObjectReference
+	datastore          types.ManagedObjectReference
+	folder             types.ManagedObjectReference
+	template           types.ManagedObjectReference
+	namePrefix         string
+	cloneType          CloneType
+	snapshotName       string
+	snapshot           *types.ManagedObjectReference
+	guestRebootOnClone bool
 
 	// snapshotMtx protects some internal variable modifications
 	snapshotMtx *sync.Mutex
@@ -249,6 +250,13 @@ func WithLinkedClone(snapshotName string) ClientOption {
 func WithInstantClone() ClientOption {
 	return func(ctx context.Context, c *client, finder *find.Finder) error {
 		c.cloneType = CloneTypeInstant
+		return nil
+	}
+}
+
+func WithGuestReboot() ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		c.guestRebootOnClone = true
 		return nil
 	}
 }
@@ -613,6 +621,12 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 		if err != nil {
 			return targetName, fmt.Errorf("failed to wait for VM '%s' network configuration: %w", targetName, err)
 		}
+
+		if c.guestRebootOnClone {
+			if err := c.guestRebootVM(ctx, clonedVM.Reference(), targetName); err != nil {
+				return targetName, err
+			}
+		}
 	default:
 		if err := c.powerOnVM(ctx, clonedVM.Reference(), targetName); err != nil {
 			return targetName, err
@@ -672,6 +686,17 @@ func (c *client) resolveSnapshot(ctx context.Context, vmRef types.ManagedObjectR
 	}
 
 	return fmt.Errorf("snapshot '%s' not found on source VM", c.snapshotName)
+}
+
+func (c *client) guestRebootVM(ctx context.Context, vmMOR types.ManagedObjectReference, vmName string) error {
+	vm := object.NewVirtualMachine(c.client.Client, vmMOR)
+
+	err := vm.RebootGuest(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to reboot guest VM '%s': %w", vmName, err)
+	}
+
+	return nil
 }
 
 func (c *client) powerOnVM(ctx context.Context, vmMOR types.ManagedObjectReference, vmName string) error {

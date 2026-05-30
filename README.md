@@ -34,21 +34,22 @@ The plugin requires configuration for both the vSphere environment and VM connec
 
 ### Provider Configuration
 
-| Parameter                  | Type   | Required | Description                                                              |
-|----------------------------|--------|----------|--------------------------------------------------------------------------|
-| `vsphere_url`              | string | Yes      | URL of the vCenter server                                                |
-| `template`                 | string | Yes      | Path to the VM template (full clone) or VM with snapshots (linked clone) |
-| `allow_insecure_connection` | bool   | Yes      | Whether to skip SSL certificate verification                             |
-| `name`                     | string | Yes      | Identifier for the instance group, used as prefix for VM names           |
-| `clone_type`               | string | Yes      | Type of clone to make (`full`,`linked` or `instant`)    |
+| Parameter                  | Type  | Required | Description                                                                 |
+|----------------------------|-------|----------|-----------------------------------------------------------------------------|
+| `vsphere_url`              | string | Yes      | URL of the vCenter server                                                   |
+| `template`                 | string | Yes      | Path to the VM template (full clone) or VM with snapshots (linked clone)    |
+| `allow_insecure_connection` | bool  | Yes      | Whether to skip SSL certificate verification                                |
+| `name`                     | string | Yes      | Identifier for the instance group, used as prefix for VM names              |
+| `clone_type`               | string | Yes      | Type of clone to make (`full`,`linked` or `instant`)                        |
 | `snapshot`                 | string | No       | Snapshot name for `linked` clones. If omitted, the current snapshot is used |
-| `username`                 | string | No       | Username to access the vCenter server                                    |
-| `password`                 | string | No       | Password to access the vCenter server                                    |
-| `folder`                   | string | No       | Destination folder where VMs will be created                             |
-| `datacenter`               | string | No       | Datacenter where VMs will be created                                     |
-| `host`                     | string | No       | Target ESXi host for the cloned VMs                                      |
-| `datastore`                | string | No       | Datastore where the cloned VMs will be located                           |
-| `resource_pool`            | string | No       | Resource pool to which cloned VMs will be added                          |
+| `username`                 | string | No       | Username to access the vCenter server                                       |
+| `password`                 | string | No       | Password to access the vCenter server                                       |
+| `folder`                   | string | No       | Destination folder where VMs will be created                                |
+| `datacenter`               | string | No       | Datacenter where VMs will be created                                        |
+| `host`                     | string | No       | Target ESXi host for the cloned VMs                                         |
+| `datastore`                | string | No       | Datastore where the cloned VMs will be located                              |
+| `resource_pool`            | string | No       | Resource pool to which cloned VMs will be added                             |
+| `reboot_on_clone`           | bool  | No       | Guest OS reboot immediately after instant clone operation.                  |
 
 If optional parameters are not specified, the plugin will attempt to use default values from the vSphere environment.
 
