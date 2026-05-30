@@ -14,6 +14,7 @@ import (
 	"github.com/vmware/govmomi/vim25/types"
 	"gitlab.com/gitlab-org/fleeting/fleeting/integration"
 	"gitlab.com/gitlab-org/fleeting/fleeting/provider"
+	vsphereclient "gitlab.com/santhanuv/fleeting-plugin-vmware-vsphere/internal/vsphere-client"
 )
 
 const (
@@ -64,6 +65,7 @@ func TestProvisioning(t *testing.T) {
 				Datastore:          datastore,
 				InsecureConnection: true,
 				Name:               "fleeting-plugin-test",
+				CloneType:          "full",
 			},
 			ConnectorConfig: provider.ConnectorConfig{
 				Timeout: 10 * time.Minute,
@@ -174,7 +176,7 @@ func TestProvisioning_LinkedClone(t *testing.T) {
 				ResourcePool:       pool,
 				Datastore:          datastore,
 				InsecureConnection: true,
-				LinkedClone:        true,
+				CloneType:          vsphereclient.CloneTypeLinked,
 				Snapshot:           linkedCloneSnapshot,
 				Name:               "fleeting-linked-test",
 			},
@@ -268,7 +270,7 @@ func TestProvisioning_LinkedClone_CurrentSnapshot(t *testing.T) {
 				ResourcePool:       pool,
 				Datastore:          datastore,
 				InsecureConnection: true,
-				LinkedClone:        true,
+				CloneType:          vsphereclient.CloneTypeLinked,
 				Snapshot:           "", // empty = use current snapshot
 				Name:               "fleeting-linked-current-test",
 			},
@@ -367,7 +369,7 @@ func TestProvisioning_LinkedClone_NestedSnapshot(t *testing.T) {
 				ResourcePool:       pool,
 				Datastore:          datastore,
 				InsecureConnection: true,
-				LinkedClone:        true,
+				CloneType:          vsphereclient.CloneTypeLinked,
 				Snapshot:           "Nested_Target",
 				Name:               "fleeting-linked-nested-test",
 			},

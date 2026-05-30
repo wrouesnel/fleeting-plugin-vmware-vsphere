@@ -36,6 +36,7 @@ func setupFakeClient(t *testing.T, setup func(client *fake.Client)) *InstanceGro
 		Datacenter: "test-datacenter",
 		Folder:     "test-folder",
 		Template:   "test-template",
+		CloneType:  "full",
 	}
 }
 
