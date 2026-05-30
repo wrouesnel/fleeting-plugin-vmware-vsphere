@@ -228,6 +228,16 @@ func (g *InstanceGroup) Heartbeat(ctx context.Context, id string) error {
 	return nil
 }
 
+func (g *InstanceGroup) Suspend(ctx context.Context, instances []string) (succeeded []string, err error) {
+	// TODO: investigate the benefits of implementing this interface beyond a stub
+	return []string{}, nil
+}
+
+func (g *InstanceGroup) Resume(ctx context.Context, instances []string) (succeeded []string, err error) {
+	// TODO: investigate the benefits of implementing this interface stub
+	return []string{}, nil
+}
+
 func (g *InstanceGroup) Shutdown(ctx context.Context) error {
 	remaining, err := g.client.GetVMs(ctx, g.log)
 	if err != nil {
