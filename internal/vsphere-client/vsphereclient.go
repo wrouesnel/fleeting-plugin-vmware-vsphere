@@ -69,6 +69,12 @@ type client struct {
 	guestRebootOnClone     bool
 	guestCommandAfterClone *GuestCommand
 
+	cloudInitCommand   *HostCommand
+	postStartCommand   *HostCommand
+	preShutdownCommand *HostCommand
+
+	hookCommandCommonEnv map[string]string
+
 	// snapshotMtx protects some internal variable modifications
 	snapshotMtx *sync.Mutex
 }
@@ -87,8 +93,12 @@ func NewClient(ctx context.Context, vsphereUrl string, insecure bool, template s
 	finder := find.NewFinder(gc.Client)
 
 	c := client{
-		client:      gc,
-		cloneType:   CloneTypeFull, // default clone type
+		client:    gc,
+		cloneType: CloneTypeFull, // default clone type
+		hookCommandCommonEnv: map[string]string{
+			"GOVC_URL":      targetURL.String(),
+			"GOVC_INSECURE": fmt.Sprintf("%v", insecure),
+		},
 		snapshotMtx: new(sync.Mutex),
 	}
 
@@ -296,6 +306,62 @@ func WithGuestCommandAfterClone(username string, password string, command string
 	}
 }
 
+func WithCloudInitMutationCommand(command string) ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		commands, err := shlex.Split(command)
+		if err != nil {
+			return err
+		}
+
+		if len(commands) == 0 {
+			return errors.New("guest command cannot be 0-length")
+		}
+
+		c.cloudInitCommand = &HostCommand{
+			Exe:  commands[0],
+			Args: commands[1:],
+		}
+		return nil
+	}
+}
+
+func WithPreShutdownCommand(command string) ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		commands, err := shlex.Split(command)
+		if err != nil {
+			return err
+		}
+
+		if len(commands) == 0 {
+			return errors.New("guest command cannot be 0-length")
+		}
+		c.preShutdownCommand = &HostCommand{
+			Exe:  commands[0],
+			Args: commands[1:],
+		}
+		return nil
+	}
+}
+
+func WithPostStartCommand(command string) ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		commands, err := shlex.Split(command)
+		if err != nil {
+			return err
+		}
+
+		if len(commands) == 0 {
+			return errors.New("guest command cannot be 0-length")
+		}
+
+		c.postStartCommand = &HostCommand{
+			Exe:  commands[0],
+			Args: commands[1:],
+		}
+		return nil
+	}
+}
+
 type taskResult struct {
 	name      string
 	isSuccess bool
@@ -312,19 +378,6 @@ func (c *client) TemplateClone(ctx context.Context, count uint, log hclog.Logger
 		return 0, fmt.Errorf("client needs to be initialized before cloning")
 	}
 
-	var config *types.VirtualMachineConfigSpec
-	if guestopts != nil {
-		userOptions, err := c.encodeUserData(guestopts.Username, guestopts.PubKey)
-		if err != nil {
-			return 0, err
-		}
-
-		config = &types.VirtualMachineConfigSpec{
-			// Cloud-init configurations for adding user for ssh
-			ExtraConfig: userOptions,
-		}
-	}
-
 	var wg sync.WaitGroup
 	resultChan := make(chan taskResult, count)
 
@@ -334,7 +387,7 @@ func (c *client) TemplateClone(ctx context.Context, count uint, log hclog.Logger
 		go func() {
 			defer wg.Done()
 
-			name, err := c.templateClone(ctx, c.template, config)
+			name, err := c.templateClone(ctx, c.template, guestopts)
 			resultChan <- taskResult{
 				name:      name,
 				isSuccess: err == nil,
@@ -461,7 +514,7 @@ func (c *client) DeleteVMs(ctx context.Context, vmNames []string, log hclog.Logg
 	return deletedVms, nil
 }
 
-func (c *client) templateClone(ctx context.Context, src types.ManagedObjectReference, config *types.VirtualMachineConfigSpec) (targetName string, err error) {
+func (c *client) templateClone(ctx context.Context, src types.ManagedObjectReference, guestOpts *GuestOsOpts) (targetName string, err error) {
 	// Rewrite task errors so they print more useful information by JSON marshalling them
 	// (which exposes it).
 	defer func() {
@@ -475,8 +528,6 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 		return "", fmt.Errorf("unknown clone type: %s", c.cloneType)
 	}
 
-	srcVM := object.NewVirtualMachine(c.client.Client, src)
-
 	// Use UUIDv7 to get temporal sorting.
 	var id uuid.UUID
 	id, err = uuid.NewV7()
@@ -485,6 +536,20 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 	}
 	targetName = fmt.Sprintf("%s-%s", c.namePrefix, id)
 
+	var config *types.VirtualMachineConfigSpec
+	if guestOpts != nil {
+		userOptions, err := c.encodeUserData(ctx, guestOpts.Username, guestOpts.PubKey, targetName)
+		if err != nil {
+			return "", fmt.Errorf("error encoding user data: %w", err)
+		}
+
+		config = &types.VirtualMachineConfigSpec{
+			// Cloud-init configurations for adding user for ssh
+			ExtraConfig: userOptions,
+		}
+	}
+
+	srcVM := object.NewVirtualMachine(c.client.Client, src)
 	folder := object.NewFolder(c.client.Client, c.folder)
 
 	var task *object.Task
@@ -702,6 +767,17 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 		}
 	}
 
+	if c.postStartCommand != nil {
+		hookMap := map[string]string{}
+		for k, v := range c.hookCommandCommonEnv {
+			hookMap[k] = v
+		}
+		hookMap["GOVC_VM"] = clonedVM.InventoryPath
+		if err := c.postStartCommand.Run(ctx, hookMap); err != nil {
+			return targetName, fmt.Errorf("failed to run post-start command: %w", err)
+		}
+	}
+
 	return targetName, nil
 }
 
@@ -802,6 +878,17 @@ func (c *client) powerOffVM(ctx context.Context, vmMOR types.ManagedObjectRefere
 
 func (c *client) deleteVM(ctx context.Context, vmMOR types.ManagedObjectReference, vmName string) error {
 	vm := object.NewVirtualMachine(c.client.Client, vmMOR)
+
+	if c.preShutdownCommand != nil {
+		hookMap := map[string]string{}
+		for k, v := range c.hookCommandCommonEnv {
+			hookMap[k] = v
+		}
+		hookMap["GOVC_VM"] = vm.InventoryPath
+		if err := c.postStartCommand.Run(ctx, hookMap); err != nil {
+			return fmt.Errorf("failed to run pre-stop command: %w", err)
+		}
+	}
 
 	state, err := vm.PowerState(ctx)
 	if err != nil {

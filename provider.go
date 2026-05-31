@@ -44,16 +44,14 @@ type InstanceGroup struct {
 	GuestUsername          string `json:"guest_username"`
 	GuestPassword          string `json:"guest_password"`
 
-	// TODO: add support for an optional "cloud-init mutation hook" so we can
-	// modify cloud-init.
-	// CloudInitMutationHook string `json:"cloud_init_mutation_hook"`
-
-	// TODO: add support for pre-/post- action hook scripts which receive VM info.
-	// This would be how we can support things like dynamic monitoring easily.
-	//PreStartScript     string `json:"pre_start_script"`
-	//PostStartScript    string `json:"post_start_script"`
-	//PreShutdownScript  string `json:"pre_shutdown_script"`
-	//PostShutdownScript string `json:"post_shutdown_script"`
+	// CloudInitMutationScript if defined is executed before the cloud-init
+	// configuration for a new VM is set. This happens _before_ the VM is cloned.
+	CloudInitMutationScript string `json:"cloud_init_mutation_script"`
+	// PostStartScript is a command which runs just after the VM is cloned and receives
+	// the MOR of the new VM.
+	PostStartScript string `json:"post_start_script"`
+	// PreShutdownScript is a command which runs just before the VM is shutdown.
+	PreShutdownScript string `json:"pre_shutdown_script"`
 
 	size     uint
 	client   vsphereclient.Client
@@ -106,6 +104,18 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 
 	if g.GuestCommandAfterClone != "" {
 		options = append(options, vsphereclient.WithGuestCommandAfterClone(g.GuestUsername, g.GuestPassword, g.GuestCommandAfterClone))
+	}
+
+	if g.CloudInitMutationScript != "" {
+		options = append(options, vsphereclient.WithCloudInitMutationCommand(g.CloudInitMutationScript))
+	}
+
+	if g.PostStartScript != "" {
+		options = append(options, vsphereclient.WithPostStartCommand(g.PostStartScript))
+	}
+
+	if g.PreShutdownScript != "" {
+		options = append(options, vsphereclient.WithPreShutdownCommand(g.PreShutdownScript))
 	}
 
 	client, err := newClient(ctx, g.VsphereUrl, g.InsecureConnection, g.Template, g.Username, g.Password, options...)
