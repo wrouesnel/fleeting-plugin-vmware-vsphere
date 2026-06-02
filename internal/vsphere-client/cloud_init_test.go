@@ -1,7 +1,12 @@
 package vsphereclient
 
 import (
+	"context"
 	"encoding/base64"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,8 +19,9 @@ func TestEncodeUserData(t *testing.T) {
 	c := &client{}
 	username := "testuser"
 	pubKey := []byte("ssh-rsa AAAATESTKEY test@example.com")
+	targetName := "target_name"
 
-	options, err := c.encodeUserData(username, pubKey)
+	options, err := c.encodeUserData(context.Background(), username, pubKey, targetName)
 	require.NoError(t, err, "encodeUserData returned error")
 
 	var userData, encoding string
@@ -40,4 +46,118 @@ func TestEncodeUserData(t *testing.T) {
 	require.Contains(t, str, string(pubKey), "ssh key missing in cloud-init YAML")
 	require.Contains(t, str, "users:", "users key missing in cloud-init YAML")
 	require.Contains(t, str, "sudo, wheel", "required groups missing in cloud-init YAML")
+}
+
+// testCloudInitHookScriptSucceeds provides a basic test of cloud-init hook script functionality.
+const testCloudInitHookScriptSucceeds = `#!/bin/bash
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
+done
+SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+
+pushd "${SCRIPT_DIR}"
+
+echo $(pwd) > cloudinit-mutation-script.out
+echo "$TARGET_NAME" >> cloudinit-mutation-script.out
+echo $CLOUDINIT_PATH >> cloudinit-mutation-script.out
+echo "---" >> cloudinit-mutation-script.out
+cat >> cloudinit-mutation-script.out
+echo "hostname: '$TARGET_NAME'" >> $CLOUDINIT_PATH
+exit 0
+`
+
+// testCloudInitHookScriptFails deliberately fails.
+const testCloudInitHookScriptFails = `#!/bin/bash
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
+done
+SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+
+pushd "${SCRIPT_DIR}"
+
+echo $(pwd) > cloudinit-mutation-script.out
+echo "$TARGET_NAME" >> cloudinit-mutation-script.out
+echo $CLOUDINIT_PATH >> cloudinit-mutation-script.out
+echo "---" >> cloudinit-mutation-script.out
+cat >> cloudinit-mutation-script.out
+exit 1
+`
+
+func TestEncodeUserDataWithSuccessfulHookScript(t *testing.T) {
+	temporaryDirectory := t.TempDir()
+	scriptPath := filepath.Join(temporaryDirectory, "cloudinit-mutation-script")
+	scriptOutputPath := filepath.Join(temporaryDirectory, "cloudinit-mutation-script.out")
+
+	err := os.WriteFile(scriptPath, []byte(testCloudInitHookScriptSucceeds), os.FileMode(0755))
+	require.NoError(t, err)
+
+	c := &client{
+		cloudInitCommand: &HostCommand{
+			Exe:              scriptPath,
+			Args:             nil,
+			WorkingDirectory: temporaryDirectory,
+			EnvVars:          nil,
+		},
+	}
+	username := "testuser"
+	pubKey := []byte("ssh-rsa AAAATESTKEY test@example.com")
+	targetName := "target_name"
+
+	options, err := c.encodeUserData(context.Background(), username, pubKey, targetName)
+	require.NoError(t, err, "encodeUserData returned error")
+
+	var userData, encoding string
+	for _, opt := range options {
+		ov := opt.(*types.OptionValue)
+		switch ov.Key {
+		case "guestinfo.userdata":
+			userData = ov.Value.(string)
+		case "guestinfo.userdata.encoding":
+			encoding = ov.Value.(string)
+		}
+	}
+
+	_, err = os.ReadFile(scriptOutputPath)
+	require.NoError(t, err, "expected to read the script output")
+
+	require.Equal(t, "base64", encoding, "expected encoding 'base64'")
+
+	decoded, err := base64.StdEncoding.DecodeString(userData)
+	require.NoError(t, err, "failed to decode base64")
+
+	str := string(decoded)
+
+	userDataLines := strings.Split(str, "\n")
+	require.Equal(t, fmt.Sprintf("hostname: '%s'", targetName), userDataLines[len(userDataLines)-2],
+		"expected to find added line to cloudinit")
+}
+
+func TestEncodeUserDataWithFailingHookScript(t *testing.T) {
+	temporaryDirectory := t.TempDir()
+	scriptPath := filepath.Join(temporaryDirectory, "cloudinit-mutation-script")
+	//scriptOutputPath := filepath.Join(temporaryDirectory, "cloudinit-mutation-script.out")
+
+	err := os.WriteFile(scriptPath, []byte(testCloudInitHookScriptFails), os.FileMode(0755))
+	require.NoError(t, err)
+
+	c := &client{
+		cloudInitCommand: &HostCommand{
+			Exe:              scriptPath,
+			Args:             nil,
+			WorkingDirectory: temporaryDirectory,
+			EnvVars:          nil,
+		},
+	}
+	username := "testuser"
+	pubKey := []byte("ssh-rsa AAAATESTKEY test@example.com")
+	targetName := "target_name"
+
+	_, err = c.encodeUserData(context.Background(), username, pubKey, targetName)
+	require.Error(t, err, "encodeUserData should have returned an error")
 }

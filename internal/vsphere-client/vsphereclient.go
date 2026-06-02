@@ -532,7 +532,7 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 	var id uuid.UUID
 	id, err = uuid.NewV7()
 	if err != nil {
-		return "", fmt.Errorf("error generating UUID: %w, err")
+		return "", fmt.Errorf("error generating UUID: %w", err)
 	}
 	targetName = fmt.Sprintf("%s-%s", c.namePrefix, id)
 
@@ -728,7 +728,7 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 		if c.guestCommandAfterClone != nil {
 			processManager, err := operationsManager.ProcessManager(ctx)
 			if err != nil {
-				return targetName, fmt.Errorf("could not get process manager for VM '%s': %w", err)
+				return targetName, fmt.Errorf("could not get process manager for VM '%s': %w", targetName, err)
 			}
 			envVars := []string{}
 			if c.guestCommandAfterClone.EnvVars != nil {
@@ -751,7 +751,7 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 				Password: c.guestCommandAfterClone.Password,
 			}
 			if _, err := processManager.StartProgram(ctx, &auth, &spec); err != nil {
-				return targetName, fmt.Errorf("could not run guest command for VM '%s': %w", err)
+				return targetName, fmt.Errorf("could not run guest command for VM '%s': %w", targetName, err)
 			}
 		}
 
