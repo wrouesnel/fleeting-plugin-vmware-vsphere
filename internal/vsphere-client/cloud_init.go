@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/vmware/govmomi/vim25/types"
 	"gopkg.in/yaml.v3"
 )
@@ -27,7 +28,7 @@ type cloudInitConfig struct {
 	Users []user `yaml:"users"`
 }
 
-func (c *client) encodeUserData(ctx context.Context, username string, pubKey []byte, targetName string) ([]types.BaseOptionValue, error) {
+func (c *client) encodeUserData(ctx context.Context, log hclog.Logger, username string, pubKey []byte, targetName string) ([]types.BaseOptionValue, error) {
 	data := cloudInitConfig{
 		Users: []user{
 			{
@@ -69,7 +70,7 @@ func (c *client) encodeUserData(ctx context.Context, username string, pubKey []b
 			return nil, fmt.Errorf("cloud-init-hook-script - error syncing content: %w", err)
 		}
 		// Execute the command. If the command fails then we're going to fail the operation.
-		err = c.cloudInitCommand.Run(ctx, map[string]string{
+		err = c.cloudInitCommand.Run(ctx, log, map[string]string{
 			"CLOUDINIT_PATH": cloudInitFile.Name(),
 			"TARGET_NAME":    targetName,
 		})

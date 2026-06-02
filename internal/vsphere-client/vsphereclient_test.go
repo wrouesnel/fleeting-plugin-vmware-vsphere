@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
@@ -236,7 +237,7 @@ func Test_templateClone_Basic(t *testing.T) {
 	pubKey, err := util.GetSshPubKey(pKey)
 	require.NoError(t, err)
 
-	targetName, err := bareClient.templateClone(t.Context(), bareClient.template, &GuestOsOpts{
+	targetName, err := bareClient.templateClone(t.Context(), hclog.NewNullLogger(), bareClient.template, &GuestOsOpts{
 		Username: "test-user",
 		PubKey:   pubKey,
 	})
@@ -244,7 +245,7 @@ func Test_templateClone_Basic(t *testing.T) {
 	require.Equal(t, true, targetName != "", "targetName was empty")
 }
 
-// TesttemplateClone tests the internal templateClone fucntion
+// TesttemplateClone tests the internal templateClone function
 func Test_templateClone_WithCloudInitHook(t *testing.T) {
 	model := simulator.VPX()
 	defer model.Remove()
@@ -289,7 +290,7 @@ func Test_templateClone_WithCloudInitHook(t *testing.T) {
 	pubKey, err := util.GetSshPubKey(pKey)
 	require.NoError(t, err)
 
-	targetName, err := bareClient.templateClone(t.Context(), bareClient.template, &GuestOsOpts{
+	targetName, err := bareClient.templateClone(t.Context(), hclog.NewNullLogger(), bareClient.template, &GuestOsOpts{
 		Username: "test-user",
 		PubKey:   pubKey,
 	})

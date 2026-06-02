@@ -387,7 +387,7 @@ func (c *client) TemplateClone(ctx context.Context, count uint, log hclog.Logger
 		go func() {
 			defer wg.Done()
 
-			name, err := c.templateClone(ctx, c.template, guestopts)
+			name, err := c.templateClone(ctx, log, c.template, guestopts)
 			resultChan <- taskResult{
 				name:      name,
 				isSuccess: err == nil,
@@ -489,7 +489,7 @@ func (c *client) DeleteVMs(ctx context.Context, vmNames []string, log hclog.Logg
 		go func(vm types.ManagedObjectReference, name string) {
 			defer wg.Done()
 
-			err := c.deleteVM(ctx, vm, name)
+			err := c.deleteVM(ctx, log, vm, name)
 			resultChan <- taskResult{
 				name:      name,
 				isSuccess: err == nil,
@@ -514,7 +514,7 @@ func (c *client) DeleteVMs(ctx context.Context, vmNames []string, log hclog.Logg
 	return deletedVms, nil
 }
 
-func (c *client) templateClone(ctx context.Context, src types.ManagedObjectReference, guestOpts *GuestOsOpts) (targetName string, err error) {
+func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.ManagedObjectReference, guestOpts *GuestOsOpts) (targetName string, err error) {
 	// Rewrite task errors so they print more useful information by JSON marshalling them
 	// (which exposes it).
 	defer func() {
@@ -539,10 +539,11 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 	} else {
 		targetName = id.String()
 	}
+	log = log.With("targetName", targetName)
 
 	var config *types.VirtualMachineConfigSpec
 	if guestOpts != nil {
-		userOptions, err := c.encodeUserData(ctx, guestOpts.Username, guestOpts.PubKey, targetName)
+		userOptions, err := c.encodeUserData(ctx, log, guestOpts.Username, guestOpts.PubKey, targetName)
 		if err != nil {
 			return "", fmt.Errorf("error encoding user data: %w", err)
 		}
@@ -630,6 +631,7 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 			task, err = srcVM.Clone(ctx, folder, targetName, spec)
 			if err != nil {
 				if spec.Snapshot != nil && !secondChance {
+					log.Warn("Error cloning VM from snapshot - re-resolving snapshot")
 					secondChance = true
 					if serr := c.resolveSnapshot(ctx, c.template); serr != nil {
 						return "", fmt.Errorf("failed to clone VM from template: %w\nsnapshot re-resolution failed: %w", err, serr)
@@ -677,7 +679,7 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 	// Got the cloned VM at this point. Defer deleting if we have an error...
 	defer func() {
 		if clonedVM != nil && err != nil {
-			if derr := c.deleteVM(ctx, clonedVM.Reference(), targetName); derr != nil {
+			if derr := c.deleteVM(ctx, log, clonedVM.Reference(), targetName); derr != nil {
 				// Return the delete error as a priority instead
 				err = derr
 			}
@@ -777,7 +779,7 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 			hookMap[k] = v
 		}
 		hookMap["GOVC_VM"] = clonedVM.InventoryPath
-		if err := c.postStartCommand.Run(ctx, hookMap); err != nil {
+		if err := c.postStartCommand.Run(ctx, log, hookMap); err != nil {
 			return targetName, fmt.Errorf("failed to run post-start command: %w", err)
 		}
 	}
@@ -880,8 +882,9 @@ func (c *client) powerOffVM(ctx context.Context, vmMOR types.ManagedObjectRefere
 	return nil
 }
 
-func (c *client) deleteVM(ctx context.Context, vmMOR types.ManagedObjectReference, vmName string) error {
+func (c *client) deleteVM(ctx context.Context, log hclog.Logger, vmMOR types.ManagedObjectReference, vmName string) error {
 	vm := object.NewVirtualMachine(c.client.Client, vmMOR)
+	log = log.With("targetName", vm.Name())
 
 	if c.preShutdownCommand != nil {
 		hookMap := map[string]string{}
@@ -889,7 +892,7 @@ func (c *client) deleteVM(ctx context.Context, vmMOR types.ManagedObjectReferenc
 			hookMap[k] = v
 		}
 		hookMap["GOVC_VM"] = vm.InventoryPath
-		if err := c.postStartCommand.Run(ctx, hookMap); err != nil {
+		if err := c.preShutdownCommand.Run(ctx, log, hookMap); err != nil {
 			return fmt.Errorf("failed to run pre-stop command: %w", err)
 		}
 	}

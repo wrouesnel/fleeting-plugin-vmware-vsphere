@@ -2,15 +2,16 @@ package vsphereclient
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
 	"github.com/vmware/govmomi/vim25/types"
+	"gitlab.com/santhanuv/fleeting-plugin-vmware-vsphere/pkg/util"
 )
 
 type fakeClient struct{}
@@ -21,7 +22,7 @@ func TestEncodeUserData(t *testing.T) {
 	pubKey := []byte("ssh-rsa AAAATESTKEY test@example.com")
 	targetName := "target_name"
 
-	options, err := c.encodeUserData(context.Background(), username, pubKey, targetName)
+	options, err := c.encodeUserData(context.Background(), hclog.NewNullLogger(), username, pubKey, targetName)
 	require.NoError(t, err, "encodeUserData returned error")
 
 	var userData, encoding string
@@ -35,10 +36,10 @@ func TestEncodeUserData(t *testing.T) {
 		}
 	}
 
-	require.Equal(t, "base64", encoding, "expected encoding 'base64'")
+	require.Equal(t, "gzip+base64", encoding, "expected encoding 'gzip+base64'")
 
-	decoded, err := base64.StdEncoding.DecodeString(userData)
-	require.NoError(t, err, "failed to decode base64")
+	decoded, err := util.ReadEncodedGzippedString(userData)
+	require.NoError(t, err, "failed to read compressed userdata")
 
 	str := string(decoded)
 	require.Contains(t, str, "#cloud-config", "cloud-config header missing")
@@ -115,7 +116,7 @@ func TestEncodeUserDataWithSuccessfulHookScript(t *testing.T) {
 	pubKey := []byte("ssh-rsa AAAATESTKEY test@example.com")
 	targetName := "target_name"
 
-	options, err := c.encodeUserData(context.Background(), username, pubKey, targetName)
+	options, err := c.encodeUserData(context.Background(), hclog.NewNullLogger(), username, pubKey, targetName)
 	require.NoError(t, err, "encodeUserData returned error")
 
 	var userData, encoding string
@@ -132,9 +133,9 @@ func TestEncodeUserDataWithSuccessfulHookScript(t *testing.T) {
 	_, err = os.ReadFile(scriptOutputPath)
 	require.NoError(t, err, "expected to read the script output")
 
-	require.Equal(t, "base64", encoding, "expected encoding 'base64'")
+	require.Equal(t, "gzip+base64", encoding, "expected encoding 'base64'")
 
-	decoded, err := base64.StdEncoding.DecodeString(userData)
+	decoded, err := util.ReadEncodedGzippedString(userData)
 	require.NoError(t, err, "failed to decode base64")
 
 	str := string(decoded)
@@ -164,6 +165,6 @@ func TestEncodeUserDataWithFailingHookScript(t *testing.T) {
 	pubKey := []byte("ssh-rsa AAAATESTKEY test@example.com")
 	targetName := "target_name"
 
-	_, err = c.encodeUserData(context.Background(), username, pubKey, targetName)
+	_, err = c.encodeUserData(context.Background(), hclog.NewNullLogger(), username, pubKey, targetName)
 	require.Error(t, err, "encodeUserData should have returned an error")
 }

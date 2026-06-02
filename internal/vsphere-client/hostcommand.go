@@ -3,8 +3,12 @@ package vsphereclient
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+
+	"github.com/hashicorp/go-hclog"
+	"gitlab.com/santhanuv/fleeting-plugin-vmware-vsphere/pkg/util"
 )
 
 // HostCommand is the definition used for holding commands to be run on the fleeting
@@ -16,7 +20,7 @@ type HostCommand struct {
 	EnvVars          map[string]string
 }
 
-func (h *HostCommand) Run(ctx context.Context, specializedEnv map[string]string) error {
+func (h *HostCommand) Run(ctx context.Context, log hclog.Logger, specializedEnv map[string]string) error {
 	command := exec.CommandContext(ctx, h.Exe, h.Args...)
 
 	extraEnv := []string{}
@@ -37,6 +41,22 @@ func (h *HostCommand) Run(ctx context.Context, specializedEnv map[string]string)
 	command.Env = extraEnv
 	if h.WorkingDirectory != "" {
 		command.Dir = h.WorkingDirectory
+	}
+
+	if outPipe, err := command.StdoutPipe(); err != nil {
+		return err
+	} else {
+		go io.Copy(util.NewLogWriter(func(msg string) {
+			log.Debug(msg, "exe", h.Exe, "stream", "stdout")
+		}), outPipe)
+	}
+
+	if errPipe, err := command.StderrPipe(); err != nil {
+		return err
+	} else {
+		go io.Copy(util.NewLogWriter(func(msg string) {
+			log.Debug(msg, "exe", h.Exe, "stream", "stderr")
+		}), errPipe)
 	}
 
 	err := command.Start()
