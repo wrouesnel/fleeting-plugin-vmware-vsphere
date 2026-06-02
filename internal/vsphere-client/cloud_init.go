@@ -28,17 +28,6 @@ type cloudInitConfig struct {
 }
 
 func (c *client) encodeUserData(ctx context.Context, username string, pubKey []byte, targetName string) ([]types.BaseOptionValue, error) {
-	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
-
-	if _, err := gw.Write(pubKey); err != nil {
-		return nil, fmt.Errorf("compressing cloud-init user data: %w", err)
-	}
-
-	if err := gw.Close(); err != nil {
-		return nil, fmt.Errorf("compressing cloud-init user data: %w", err)
-	}
-
 	data := cloudInitConfig{
 		Users: []user{
 			{
@@ -105,7 +94,19 @@ func (c *client) encodeUserData(ctx context.Context, username string, pubKey []b
 
 	config := fmt.Sprintf("#cloud-config\n\n%s", marshalled)
 
-	encoded := base64.StdEncoding.EncodeToString([]byte(config))
+	// Compress the output
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+
+	if _, err := gw.Write([]byte(config)); err != nil {
+		return nil, fmt.Errorf("compressing cloud-init user data: %w", err)
+	}
+
+	if err := gw.Close(); err != nil {
+		return nil, fmt.Errorf("compressing cloud-init user data: %w", err)
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(buf.Bytes())
 
 	options := []types.BaseOptionValue{
 		&types.OptionValue{
@@ -114,7 +115,7 @@ func (c *client) encodeUserData(ctx context.Context, username string, pubKey []b
 		},
 		&types.OptionValue{
 			Key:   "guestinfo.userdata.encoding",
-			Value: "base64",
+			Value: "gzip+base64",
 		},
 	}
 

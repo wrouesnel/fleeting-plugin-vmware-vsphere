@@ -16,7 +16,7 @@ type PrivPub interface {
 	Public() crypto.PublicKey
 }
 
-func (g *InstanceGroup) getSshPubKey(privKey []byte) ([]byte, error) {
+func GetSshPubKey(privKey []byte) ([]byte, error) {
 	priv, err := ssh.ParseRawPrivateKey(privKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading private key: %w", err)
@@ -35,7 +35,7 @@ func (g *InstanceGroup) getSshPubKey(privKey []byte) ([]byte, error) {
 	return ssh.MarshalAuthorizedKey(pubkey), nil
 }
 
-func (g *InstanceGroup) generateSshKey() ([]byte, error) {
+func GenerateSshKey() ([]byte, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 4096)
 	if err != nil {
 		return nil, fmt.Errorf("generating private key: %w", err)
