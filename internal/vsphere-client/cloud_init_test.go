@@ -62,10 +62,11 @@ pushd "${SCRIPT_DIR}"
 
 echo $(pwd) > cloudinit-mutation-script.out
 echo "$TARGET_NAME" >> cloudinit-mutation-script.out
-echo $CLOUDINIT_PATH >> cloudinit-mutation-script.out
-echo "---" >> cloudinit-mutation-script.out
-cat >> cloudinit-mutation-script.out
+echo "$CLOUDINIT_PATH" >> cloudinit-mutation-script.out
+# Modify the script
 echo "hostname: '$TARGET_NAME'" >> $CLOUDINIT_PATH
+echo "---" >> cloudinit-mutation-script.out
+cat "$CLOUDINIT_PATH" >> cloudinit-mutation-script.out
 exit 0
 `
 
@@ -85,17 +86,22 @@ echo $(pwd) > cloudinit-mutation-script.out
 echo "$TARGET_NAME" >> cloudinit-mutation-script.out
 echo $CLOUDINIT_PATH >> cloudinit-mutation-script.out
 echo "---" >> cloudinit-mutation-script.out
-cat >> cloudinit-mutation-script.out
+cat "$CLOUDINIT_PATH" >> cloudinit-mutation-script.out
 exit 1
 `
 
-func TestEncodeUserDataWithSuccessfulHookScript(t *testing.T) {
-	temporaryDirectory := t.TempDir()
-	scriptPath := filepath.Join(temporaryDirectory, "cloudinit-mutation-script")
-	scriptOutputPath := filepath.Join(temporaryDirectory, "cloudinit-mutation-script.out")
+func setupSuccessfulCloudInitHookScript(t *testing.T) (temporaryDirectory, scriptPath, scriptOutputPath string) {
+	temporaryDirectory = t.TempDir()
+	scriptPath = filepath.Join(temporaryDirectory, "cloudinit-mutation-script")
+	scriptOutputPath = filepath.Join(temporaryDirectory, "cloudinit-mutation-script.out")
 
 	err := os.WriteFile(scriptPath, []byte(testCloudInitHookScriptSucceeds), os.FileMode(0755))
 	require.NoError(t, err)
+	return
+}
+
+func TestEncodeUserDataWithSuccessfulHookScript(t *testing.T) {
+	temporaryDirectory, scriptPath, scriptOutputPath := setupSuccessfulCloudInitHookScript(t)
 
 	c := &client{
 		cloudInitCommand: &HostCommand{
