@@ -534,7 +534,11 @@ func (c *client) templateClone(ctx context.Context, src types.ManagedObjectRefer
 	if err != nil {
 		return "", fmt.Errorf("error generating UUID: %w", err)
 	}
-	targetName = fmt.Sprintf("%s-%s", c.namePrefix, id)
+	if c.namePrefix != "" {
+		targetName = fmt.Sprintf("%s-%s", c.namePrefix, id)
+	} else {
+		targetName = id.String()
+	}
 
 	var config *types.VirtualMachineConfigSpec
 	if guestOpts != nil {
