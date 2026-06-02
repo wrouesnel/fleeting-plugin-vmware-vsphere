@@ -3,6 +3,8 @@ package vsphere
 import (
 	"context"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -484,4 +486,110 @@ func TestProvisioning_MissingName(t *testing.T) {
 
 	_, err = ig.Init(context.Background(), nil, settings)
 	require.Error(t, err, "expected error when InstanceGroup name is empty, got nil")
+}
+
+// testCloudInitHookScriptSucceeds provides a basic test of cloud-init hook script functionality.
+const testCloudInitHookScriptSucceeds = `#!/bin/bash
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
+done
+SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+
+pushd "${SCRIPT_DIR}"
+
+echo "Output working directory"
+echo $(pwd) > cloudinit-mutation-script.out
+echo "Output TARGET_NAME: ${TARGET_NAME}"
+echo "$TARGET_NAME" >> cloudinit-mutation-script.out
+echo "Output original cloud-init path: $CLOUDINIT_PATH"
+echo "$CLOUDINIT_PATH" >> cloudinit-mutation-script.out
+echo "Modifying the cloudinit file"
+echo "hostname: '$TARGET_NAME'" >> ${CLOUDINIT_PATH}
+echo "---" >> cloudinit-mutation-script.out
+cat "$CLOUDINIT_PATH" >> cloudinit-mutation-script.out
+exit 0
+`
+
+// testCloudInitHookScriptFails deliberately fails.
+const testCloudInitHookScriptFails = `#!/bin/bash
+echo "Deliberately Failing"
+echo "Also on stderr" 1>&2
+exit 1
+`
+
+func setupFailingCloudInitHookScript(t *testing.T) (temporaryDirectory, scriptPath, scriptOutputPath string) {
+	temporaryDirectory = t.TempDir()
+	scriptPath = filepath.Join(temporaryDirectory, "cloudinit-mutation-script")
+	scriptOutputPath = filepath.Join(temporaryDirectory, "cloudinit-mutation-script.out")
+
+	err := os.WriteFile(scriptPath, []byte(testCloudInitHookScriptFails), os.FileMode(0755))
+	require.NoError(t, err)
+	return
+}
+
+func setupSuccessfulCloudInitHookScript(t *testing.T) (temporaryDirectory, scriptPath, scriptOutputPath string) {
+	temporaryDirectory = t.TempDir()
+	scriptPath = filepath.Join(temporaryDirectory, "cloudinit-mutation-script")
+	scriptOutputPath = filepath.Join(temporaryDirectory, "cloudinit-mutation-script.out")
+
+	err := os.WriteFile(scriptPath, []byte(testCloudInitHookScriptSucceeds), os.FileMode(0755))
+	require.NoError(t, err)
+	return
+}
+
+func TestProvisioningWithCloudInitMutation(t *testing.T) {
+	_, scriptPath, scriptOutputPath := setupSuccessfulCloudInitHookScript(t)
+
+	model := simulator.VPX()
+	defer model.Remove()
+
+	model.Datacenter = 1
+	model.Host = 1
+	model.Datastore = 1
+	model.Cluster = 1
+	model.Pool = 1
+	model.Folder = 0
+
+	err := model.Create()
+	if err != nil {
+		t.Fatalf("simulating vsphere: %s", err)
+	}
+
+	s := model.Service.NewServer()
+	defer s.Close()
+
+	setupTestEnv(t, s.URL)
+	if err != nil {
+		t.Fatalf("setting up test environment: %s", err)
+	}
+
+	integration.TestProvisioning(t,
+		integration.BuildPluginBinary(t, "cmd/fleeting-plugin-vsphere", "fleeting-plugin-vsphere"),
+		integration.Config{
+			PluginConfig: InstanceGroup{
+				VsphereUrl:              s.URL.String(),
+				Template:                templateName,
+				Folder:                  vmFolder,
+				Datacenter:              datacenter,
+				Host:                    host,
+				ResourcePool:            pool,
+				Datastore:               datastore,
+				InsecureConnection:      true,
+				Name:                    "fleeting-plugin-test",
+				CloneType:               "full",
+				CloudInitMutationScript: scriptPath,
+			},
+			ConnectorConfig: provider.ConnectorConfig{
+				Timeout: 10 * time.Minute,
+			},
+			MaxInstances:    3,
+			UseExternalAddr: false,
+		})
+
+	// Check that we wrote a cloud-init output script
+	_, err = os.ReadFile(scriptOutputPath)
+	require.NoError(t, err)
 }

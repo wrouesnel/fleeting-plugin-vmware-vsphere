@@ -3,12 +3,9 @@ package vsphere
 import (
 	"context"
 	"fmt"
-	"os"
 	"path"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"gitlab.com/gitlab-org/fleeting/fleeting/provider"
@@ -65,56 +62,8 @@ type InstanceGroup struct {
 	sshPubKey []byte
 }
 
-func GetPrefixedEnv(n string) string {
-	return fmt.Sprintf("%s_%s", strings.ToUpper(NAME), n)
-}
-
 func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings provider.Settings) (provider.ProviderInfo, error) {
 	var options []vsphereclient.ClientOption
-
-	// It's almost impossible to get logs from gitlab, which makes debugging hook
-	// scripts difficult. Read environment to customize the logger.
-	if value := GetPrefixedEnv("LOG_ENABLED"); value != "" {
-		if separatedLogger, _ := strconv.ParseBool(value); separatedLogger {
-			logLevel := GetPrefixedEnv("LOG_LEVEL")
-			level := hclog.DefaultLevel
-			if logLevel != "" {
-				level = hclog.LevelFromString(logLevel)
-			}
-
-			output := os.Stderr
-			outputConfig := GetPrefixedEnv("LOG_OUTPUT")
-			if outputConfig != "" {
-				switch outputConfig {
-				case "stderr:":
-					output = os.Stderr
-				case "stdout:":
-					output = os.Stdout
-
-				default:
-					if strings.HasPrefix(outputConfig, "file:") {
-						_, path, found := strings.Cut(outputConfig, ":")
-						if found {
-							f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND, os.FileMode(0644))
-							if err == nil {
-								output = f
-							}
-						}
-					}
-				}
-			}
-
-			logger = hclog.New(&hclog.LoggerOptions{
-				Level:  level,
-				Output: output,
-				TimeFn: time.Now,
-			})
-		}
-	}
-
-	if logger == nil {
-		logger = hclog.Default().With("plugin", NAME)
-	}
 
 	if g.Datacenter != "" {
 		options = append(options, vsphereclient.WithDatacenter(g.Datacenter))
