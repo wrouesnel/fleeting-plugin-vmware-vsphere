@@ -314,7 +314,7 @@ func WithCloudInitMutationCommand(command string) ClientOption {
 		}
 
 		if len(commands) == 0 {
-			return errors.New("guest command cannot be 0-length")
+			return errors.New("host command cannot be 0-length")
 		}
 
 		c.cloudInitCommand = &HostCommand{
@@ -333,7 +333,7 @@ func WithPreShutdownCommand(command string) ClientOption {
 		}
 
 		if len(commands) == 0 {
-			return errors.New("guest command cannot be 0-length")
+			return errors.New("host command cannot be 0-length")
 		}
 		c.preShutdownCommand = &HostCommand{
 			Exe:  commands[0],
@@ -351,7 +351,7 @@ func WithPostStartCommand(command string) ClientOption {
 		}
 
 		if len(commands) == 0 {
-			return errors.New("guest command cannot be 0-length")
+			return errors.New("host command cannot be 0-length")
 		}
 
 		c.postStartCommand = &HostCommand{
