@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"gitlab.com/gitlab-org/fleeting/fleeting/provider"
 	vsphereclient "gitlab.com/santhanuv/fleeting-plugin-vmware-vsphere/internal/vsphere-client"
+	"gitlab.com/santhanuv/fleeting-plugin-vmware-vsphere/pkg/util"
 )
 
 const MaxInstances = 50
@@ -163,7 +164,7 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 	}
 
 	if g.settings.Key == nil {
-		key, err := g.generateSshKey()
+		key, err := util.GenerateSshKey()
 		if err != nil {
 			return provider.ProviderInfo{}, nil
 		}
@@ -171,7 +172,7 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 		g.settings.Key = key
 	}
 
-	pubKey, err := g.getSshPubKey(g.settings.Key)
+	pubKey, err := util.GetSshPubKey(g.settings.Key)
 	if err != nil {
 		return provider.ProviderInfo{}, err
 	}
