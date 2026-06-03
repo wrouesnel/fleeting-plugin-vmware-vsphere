@@ -8,7 +8,7 @@ import (
 	"os/exec"
 
 	"github.com/hashicorp/go-hclog"
-	"gitlab.com/santhanuv/fleeting-plugin-vmware-vsphere/pkg/util"
+	"github.com/wrouesnel/fleeting-plugin-vmware-vsphere/pkg/util"
 )
 
 // HostCommand is the definition used for holding commands to be run on the fleeting

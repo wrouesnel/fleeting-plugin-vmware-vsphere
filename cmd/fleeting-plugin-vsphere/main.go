@@ -1,10 +1,11 @@
 package main
 
 import (
+	vsphere "github.com/wrouesnel/fleeting-plugin-vmware-vsphere"
+	"github.com/wrouesnel/fleeting-plugin-vmware-vsphere/version"
 	"gitlab.com/gitlab-org/fleeting/fleeting/plugin"
-	vsphere "gitlab.com/santhanuv/fleeting-plugin-vmware-vsphere"
 )
 
 func main() {
-	plugin.Main(&vsphere.InstanceGroup{}, vsphere.Version)
+	plugin.Main(&vsphere.InstanceGroup{}, version.VersionInfo)
 }

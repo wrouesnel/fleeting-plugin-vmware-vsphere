@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
 	"github.com/vmware/govmomi/vim25/types"
-	"gitlab.com/santhanuv/fleeting-plugin-vmware-vsphere/pkg/util"
+	"github.com/wrouesnel/fleeting-plugin-vmware-vsphere/pkg/util"
 )
 
 type fakeClient struct{}

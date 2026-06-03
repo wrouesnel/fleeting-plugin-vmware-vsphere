@@ -8,9 +8,10 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-hclog"
+	vsphereclient "github.com/wrouesnel/fleeting-plugin-vmware-vsphere/internal/vsphere-client"
+	"github.com/wrouesnel/fleeting-plugin-vmware-vsphere/pkg/util"
+	"github.com/wrouesnel/fleeting-plugin-vmware-vsphere/version"
 	"gitlab.com/gitlab-org/fleeting/fleeting/provider"
-	vsphereclient "gitlab.com/santhanuv/fleeting-plugin-vmware-vsphere/internal/vsphere-client"
-	"gitlab.com/santhanuv/fleeting-plugin-vmware-vsphere/pkg/util"
 )
 
 const MaxInstances = 50
@@ -132,8 +133,8 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 	providerInfo := provider.ProviderInfo{
 		ID:        path.Join("vsphere", g.Name, g.Datacenter),
 		MaxSize:   MaxInstances,
-		Version:   Version.String(),
-		BuildInfo: Version.BuildInfo(),
+		Version:   version.VersionInfo.String(),
+		BuildInfo: version.VersionInfo.BuildInfo(),
 	}
 
 	if g.settings.UseStaticCredentials {

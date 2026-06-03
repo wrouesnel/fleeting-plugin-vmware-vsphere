@@ -15,7 +15,7 @@ import (
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/simulator"
 	"github.com/vmware/govmomi/vim25/types"
-	"gitlab.com/santhanuv/fleeting-plugin-vmware-vsphere/pkg/util"
+	"github.com/wrouesnel/fleeting-plugin-vmware-vsphere/pkg/util"
 )
 
 func Test_parseURL(t *testing.T) {
