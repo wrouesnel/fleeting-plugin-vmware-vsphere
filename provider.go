@@ -3,18 +3,20 @@ package vsphere
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"slices"
 	"strings"
 
 	"github.com/hashicorp/go-hclog"
+	"github.com/samber/lo"
 	vsphereclient "github.com/wrouesnel/fleeting-plugin-vmware-vsphere/internal/vsphere-client"
 	"github.com/wrouesnel/fleeting-plugin-vmware-vsphere/pkg/util"
 	"github.com/wrouesnel/fleeting-plugin-vmware-vsphere/version"
 	"gitlab.com/gitlab-org/fleeting/fleeting/provider"
 )
 
-const MaxInstances = 50
+const DefaultMaxInstances = 50
 
 var _ provider.InstanceGroup = (*InstanceGroup)(nil)
 
@@ -34,6 +36,9 @@ type InstanceGroup struct {
 	CloneType          vsphereclient.CloneType `json:"clone_type"`
 	Snapshot           string                  `json:"snapshot"`
 	Name               string                  `json:"name"`
+	CpuCount           uint64                  `json:"cpu_count"`
+	MemorySizeGb       uint64                  `json:"memory_size_gb"`
+
 	// GuestRebootAfterClone applies only to instant-clones and prompts for the VM to
 	// request a guest OS reboot after cloning. This can be useful for resetting
 	// Cloud-Init.
@@ -57,6 +62,15 @@ type InstanceGroup struct {
 	NetInfoScript string `json:"netinfo_script"`
 	// PreShutdownScript is a command which runs just before the VM is shutdown.
 	PreShutdownScript string `json:"pre_shutdown_script"`
+
+	// MaxInstances is the maximum number of instances to allow. If 0, then the default of
+	// 50 is used.
+	MaxInstances uint64 `json:"max_instances"`
+
+	// OutputSSHKeyPath if specified is a path the plugin will attempt to write the generated
+	// SSH private key to when none is specified. This allows using the key to access instances
+	// while rotaitng it whenever the runner is restarted.
+	OutputSSHKeyPath string `json:"output_ssh_key_path"`
 
 	size     uint
 	client   vsphereclient.Client
@@ -103,6 +117,14 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 		return provider.ProviderInfo{}, fmt.Errorf("unhandled clone type %q", g.CloneType)
 	}
 
+	if g.CpuCount > 0 {
+		options = append(options, vsphereclient.WithCPUCount(g.CpuCount))
+	}
+
+	if g.MemorySizeGb > 0 {
+		options = append(options, vsphereclient.WithMemorySize(g.MemorySizeGb))
+	}
+
 	if g.GuestRebootAfterClone {
 		options = append(options, vsphereclient.WithGuestReboot())
 	}
@@ -139,7 +161,7 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 
 	providerInfo := provider.ProviderInfo{
 		ID:        path.Join("vsphere", g.Name, g.Datacenter),
-		MaxSize:   MaxInstances,
+		MaxSize:   lo.Ternary(g.MaxInstances == 0, int(DefaultMaxInstances), int(g.MaxInstances)),
 		Version:   version.VersionInfo.String(),
 		BuildInfo: version.VersionInfo.BuildInfo(),
 	}
@@ -175,6 +197,13 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 		key, err := util.GenerateSshKey()
 		if err != nil {
 			return provider.ProviderInfo{}, nil
+		}
+
+		if g.OutputSSHKeyPath != "" {
+			if err := os.WriteFile(g.OutputSSHKeyPath, key, os.FileMode(0600)); err != nil {
+				logger.Error("Could not write the generated SSH key to a file!",
+					"path", g.OutputSSHKeyPath, "err", err)
+			}
 		}
 
 		g.settings.Key = key

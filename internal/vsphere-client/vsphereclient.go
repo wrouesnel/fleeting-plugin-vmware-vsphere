@@ -55,17 +55,28 @@ type GuestCommand struct {
 }
 
 type client struct {
-	client                 *govmomi.Client
-	datacenter             types.ManagedObjectReference
-	pool                   types.ManagedObjectReference
-	host                   *types.ManagedObjectReference
-	datastore              types.ManagedObjectReference
-	folder                 types.ManagedObjectReference
-	template               types.ManagedObjectReference
-	namePrefix             string
-	cloneType              CloneType
-	snapshotName           string
-	snapshot               *types.ManagedObjectReference
+	client     *govmomi.Client
+	datacenter types.ManagedObjectReference
+	pool       types.ManagedObjectReference
+	host       *types.ManagedObjectReference
+	datastore  types.ManagedObjectReference
+	folder     types.ManagedObjectReference
+	template   types.ManagedObjectReference
+	namePrefix string
+	cloneType  CloneType
+
+	// cpuCount is the core count to assign to the clone. If 0, then no change
+	// is made. If an instant clone is being made this value must be larger then
+	// the existing allocation.
+	cpuCount uint64
+	// memorySizeGb is the memory allocation to provide to the clone.
+	// If 0, then no change is made. If an instant clone is being made this
+	// value must be larger then the existing allocation.
+	memorySizeGb uint64
+
+	snapshotName string
+	snapshot     *types.ManagedObjectReference
+
 	guestRebootOnClone     bool
 	guestCommandAfterClone *GuestCommand
 
@@ -281,6 +292,20 @@ func WithInstantClone() ClientOption {
 func WithGuestReboot() ClientOption {
 	return func(ctx context.Context, c *client, finder *find.Finder) error {
 		c.guestRebootOnClone = true
+		return nil
+	}
+}
+
+func WithCPUCount(cpuCount uint64) ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		c.cpuCount = cpuCount
+		return nil
+	}
+}
+
+func WithMemorySize(memoryGb uint64) ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		c.memorySizeGb = memoryGb
 		return nil
 	}
 }
