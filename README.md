@@ -96,7 +96,7 @@ It is possible to make changes here which will prevent the plugin connecting to 
 
 | Environment Variable | Description                                                      |
 |----------------------|------------------------------------------------------------------|
-| `CLOUDINIT_PATH`     | Path to a temporary file containing the JSON encoded cloud init. |
+| `CLOUDINIT_PATH`     | Path to a temporary file containing the YAML encoded cloud init. |
 | `TARGET_NAME`        | Name which will be assigned to the virtual machine being started |
 
 #### `post_start_script`
