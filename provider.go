@@ -52,6 +52,9 @@ type InstanceGroup struct {
 	// PostStartScript is a command which runs just after the VM is cloned and receives
 	// the MOR of the new VM.
 	PostStartScript string `json:"post_start_script"`
+	// NetInfoScript is a command which runs just after a VM's IP is successfully determined.
+	// It may run multiple times with the same data.
+	NetInfoScript string `json:"netinfo_script"`
 	// PreShutdownScript is a command which runs just before the VM is shutdown.
 	PreShutdownScript string `json:"pre_shutdown_script"`
 
@@ -114,6 +117,10 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 
 	if g.PostStartScript != "" {
 		options = append(options, vsphereclient.WithPostStartCommand(g.PostStartScript))
+	}
+
+	if g.NetInfoScript != "" {
+		options = append(options, vsphereclient.WithNetInfoCommand(g.NetInfoScript))
 	}
 
 	if g.PreShutdownScript != "" {
@@ -189,7 +196,7 @@ func (g *InstanceGroup) ConnectInfo(ctx context.Context, id string) (provider.Co
 		ConnectorConfig: g.settings.ConnectorConfig,
 	}
 
-	internalIP, err := g.client.NetInfo(ctx, id)
+	internalIP, err := g.client.NetInfo(ctx, g.log, id)
 	if err != nil {
 		return provider.ConnectInfo{}, fmt.Errorf("fetching ip address: %w", err)
 	}

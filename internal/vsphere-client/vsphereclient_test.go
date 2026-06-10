@@ -304,3 +304,63 @@ func Test_templateClone_WithCloudInitHook(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("hostname: '%s'", targetName), userDataLines[len(userDataLines)-2],
 		"expected to find added line to cloudinit")
 }
+
+// TesttemplateClone tests executing post start hooks with the simulator
+func Test_templateClone_WithPostStartHook(t *testing.T) {
+	model := simulator.VPX()
+	defer model.Remove()
+
+	model.Datacenter = 1
+	model.Host = 1
+	model.Datastore = 1
+	model.Cluster = 1
+	model.Pool = 1
+	model.Folder = 0
+
+	err := model.Create()
+	if err != nil {
+		t.Fatalf("simulating vsphere: %s", err)
+	}
+
+	s := model.Service.NewServer()
+	defer s.Close()
+
+	err = setupTestEnv(t, s.URL)
+	require.NoError(t, err)
+
+	_, scriptPath, scriptOutputPath := setupSuccessfulPostStartScript(t)
+
+	c, err := NewClient(
+		t.Context(),
+		s.URL.String(),
+		true,
+		templateName,
+		"",
+		"",
+		WithPool(pool),
+		WithPostStartCommand(scriptPath),
+	)
+	require.NoError(t, err)
+
+	// Get the bare client
+	bareClient := c.(*client)
+
+	pKey, err := util.GenerateSshKey()
+	require.NoError(t, err)
+	pubKey, err := util.GetSshPubKey(pKey)
+	require.NoError(t, err)
+
+	targetName, err := bareClient.templateClone(t.Context(), hclog.NewNullLogger(), bareClient.template, &GuestOsOpts{
+		Username: "test-user",
+		PubKey:   pubKey,
+	})
+	require.NoError(t, err)
+	require.Equal(t, true, targetName != "", "targetName was empty")
+
+	scriptOutputBytes, err := os.ReadFile(scriptOutputPath)
+	require.NoError(t, err, "expected to read the script output")
+
+	userDataLines := strings.Split(string(scriptOutputBytes), "\n")
+	require.Equal(t, true, strings.HasPrefix(userDataLines[len(userDataLines)-2], "VirtualMachine:vm-"),
+		"expected to find a managed object reference for a virtual machine")
+}

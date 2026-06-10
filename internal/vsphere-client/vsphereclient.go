@@ -30,7 +30,7 @@ type Client interface {
 	DeleteVMs(ctx context.Context, vmNames []string, log hclog.Logger) ([]string, error)
 	TemplateClone(ctx context.Context, count uint, log hclog.Logger, guestopts *GuestOsOpts) (uint, error)
 	GetVMs(ctx context.Context, logger hclog.Logger) (map[string]provider.State, error)
-	NetInfo(ctx context.Context, vmName string) (string, error)
+	NetInfo(ctx context.Context, logger hclog.Logger, vmName string) (string, error)
 	GuestOs(ctx context.Context) (string, error)
 }
 
@@ -71,6 +71,7 @@ type client struct {
 
 	cloudInitCommand   *HostCommand
 	postStartCommand   *HostCommand
+	netInfoCommand     *HostCommand
 	preShutdownCommand *HostCommand
 
 	hookCommandCommonEnv map[string]string
@@ -355,6 +356,25 @@ func WithPostStartCommand(command string) ClientOption {
 		}
 
 		c.postStartCommand = &HostCommand{
+			Exe:  commands[0],
+			Args: commands[1:],
+		}
+		return nil
+	}
+}
+
+func WithNetInfoCommand(command string) ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		commands, err := shlex.Split(command)
+		if err != nil {
+			return err
+		}
+
+		if len(commands) == 0 {
+			return errors.New("host command cannot be 0-length")
+		}
+
+		c.netInfoCommand = &HostCommand{
 			Exe:  commands[0],
 			Args: commands[1:],
 		}
@@ -778,7 +798,7 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 		for k, v := range c.hookCommandCommonEnv {
 			hookMap[k] = v
 		}
-		hookMap["GOVC_VM"] = clonedVM.InventoryPath
+		hookMap["GOVC_VM"] = clonedVM.Reference().String()
 		if err := c.postStartCommand.Run(ctx, log, hookMap); err != nil {
 			return targetName, fmt.Errorf("failed to run post-start command: %w", err)
 		}
@@ -891,7 +911,7 @@ func (c *client) deleteVM(ctx context.Context, log hclog.Logger, vmMOR types.Man
 		for k, v := range c.hookCommandCommonEnv {
 			hookMap[k] = v
 		}
-		hookMap["GOVC_VM"] = vm.InventoryPath
+		hookMap["GOVC_VM"] = vm.Reference().String()
 		if err := c.preShutdownCommand.Run(ctx, log, hookMap); err != nil {
 			return fmt.Errorf("failed to run pre-stop command: %w", err)
 		}
@@ -963,7 +983,7 @@ func (c *client) getVMState(ctx context.Context, vmMOR types.ManagedObjectRefere
 	return provider.StateCreating, nil
 }
 
-func (c *client) NetInfo(ctx context.Context, vmName string) (string, error) {
+func (c *client) NetInfo(ctx context.Context, log hclog.Logger, vmName string) (string, error) {
 	folder := object.NewFolder(c.client.Client, c.folder)
 
 	var folderProps mo.Folder
@@ -1021,6 +1041,20 @@ func (c *client) NetInfo(ctx context.Context, vmName string) (string, error) {
 
 	if internalIP == "" {
 		return "", fmt.Errorf("failed to get ip address of vm '%s'", vmName)
+	}
+
+	if c.netInfoCommand != nil {
+		hookMap := map[string]string{}
+		for k, v := range c.hookCommandCommonEnv {
+			hookMap[k] = v
+		}
+		hookMap["GOVC_VM"] = vm.Reference().String()
+		hookMap["TARGET_NAME"] = vmName
+		hookMap["GUEST_IP"] = internalIP
+		hookMap["GUEST_HOSTNAME"] = vmNetInfo.Guest.HostName
+		if err := c.netInfoCommand.Run(ctx, log, hookMap); err != nil {
+			return "", fmt.Errorf("failed to run netinfo command: %w", err)
+		}
 	}
 
 	return internalIP, nil

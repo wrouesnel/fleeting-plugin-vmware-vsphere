@@ -52,7 +52,7 @@ func (c *Client) GetVMs(ctx context.Context, logger hclog.Logger) (map[string]pr
 	return c.Instances, nil
 }
 
-func (c *Client) NetInfo(ctx context.Context, vmName string) (string, error) {
+func (c *Client) NetInfo(ctx context.Context, logger hclog.Logger, vmName string) (string, error) {
 	return "10.0.0.1", nil
 }
 
