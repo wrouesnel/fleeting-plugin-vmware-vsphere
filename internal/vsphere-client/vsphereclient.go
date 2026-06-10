@@ -586,21 +586,35 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 	}
 	log = log.With("targetName", targetName)
 
-	var config *types.VirtualMachineConfigSpec
+	config := &types.VirtualMachineConfigSpec{}
 	if guestOpts != nil {
 		userOptions, err := c.encodeUserData(ctx, log, guestOpts.Username, guestOpts.PubKey, targetName)
 		if err != nil {
 			return "", fmt.Errorf("error encoding user data: %w", err)
 		}
 
-		config = &types.VirtualMachineConfigSpec{
-			// Cloud-init configurations for adding user for ssh
-			ExtraConfig: userOptions,
-		}
+		config.ExtraConfig = userOptions
 	}
 
 	srcVM := object.NewVirtualMachine(c.client.Client, src)
 	folder := object.NewFolder(c.client.Client, c.folder)
+
+	if c.cpuCount > 0 || c.memorySizeGb > 0 {
+		var templateInfo mo.VirtualMachine
+		if err := srcVM.Properties(ctx, srcVM.Reference(), []string{"summary"}, &templateInfo); err != nil {
+			if err != nil {
+				return "", fmt.Errorf("error getting template info: %w", err)
+			}
+		}
+
+		if c.cpuCount > 0 {
+			config.NumCPUs = int32(c.cpuCount)
+		}
+
+		if c.memorySizeGb > 0 {
+			config.MemoryMB = int64(c.memorySizeGb * 1024)
+		}
+	}
 
 	var task *object.Task
 
