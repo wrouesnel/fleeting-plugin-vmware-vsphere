@@ -14,6 +14,7 @@ import (
 	"github.com/google/shlex"
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-hclog"
+	"github.com/kballard/go-shellquote"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/guest"
@@ -523,8 +524,9 @@ func (c *client) GetVMs(ctx context.Context, logger hclog.Logger) (map[string]pr
 		for k, v := range c.hookCommandCommonEnv {
 			hookMap[k] = v
 		}
-		hookMap["GOVC_VMS"] = strings.Join(vmsMors, " ")
-		hookMap["TARGET_NAMES"] = strings.Join(vmNames, " ")
+
+		hookMap["GOVC_VMS"] = shellquote.Join(vmsMors...)
+		hookMap["TARGET_NAMES"] = shellquote.Join(vmNames...)
 		if err := c.getVMsCommand.Run(ctx, logger, hookMap); err != nil {
 			// Unlike other hooks, the getVMs hook doesn't stop us returning VMs.
 			// It should be used for observer-type or clean-up type commands.
