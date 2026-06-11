@@ -84,6 +84,7 @@ type client struct {
 	postStartCommand   *HostCommand
 	netInfoCommand     *HostCommand
 	preShutdownCommand *HostCommand
+	getVMsCommand      *HostCommand
 
 	hookCommandCommonEnv map[string]string
 
@@ -332,6 +333,24 @@ func WithGuestCommandAfterClone(username string, password string, command string
 	}
 }
 
+func WithGetVMsCommand(command string) ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		commands, err := shlex.Split(command)
+		if err != nil {
+			return err
+		}
+
+		if len(commands) == 0 {
+			return errors.New("host command cannot be 0-length")
+		}
+		c.getVMsCommand = &HostCommand{
+			Exe:  commands[0],
+			Args: commands[1:],
+		}
+		return nil
+	}
+}
+
 func WithCloudInitMutationCommand(command string) ClientOption {
 	return func(ctx context.Context, c *client, finder *find.Finder) error {
 		commands, err := shlex.Split(command)
@@ -464,6 +483,9 @@ func (c *client) GetVMs(ctx context.Context, logger hclog.Logger) (map[string]pr
 	folder.Properties(ctx, folder.Reference(), []string{"childEntity"}, &folderProps)
 
 	vms := make(map[string]provider.State)
+	vmsMors := []string{}
+	vmNames := []string{}
+
 	for _, mor := range folderProps.ChildEntity {
 		if mor.Type != "VirtualMachine" {
 			continue
@@ -491,6 +513,23 @@ func (c *client) GetVMs(ctx context.Context, logger hclog.Logger) (map[string]pr
 		}
 
 		vms[name] = state
+
+		vmsMors = append(vmsMors, mor.String())
+		vmNames = append(vmNames, name)
+	}
+
+	if c.getVMsCommand != nil {
+		hookMap := map[string]string{}
+		for k, v := range c.hookCommandCommonEnv {
+			hookMap[k] = v
+		}
+		hookMap["GOVC_VMS"] = strings.Join(vmsMors, " ")
+		hookMap["TARGET_NAMES"] = strings.Join(vmNames, " ")
+		if err := c.getVMsCommand.Run(ctx, logger, hookMap); err != nil {
+			// Unlike other hooks, the getVMs hook doesn't stop us returning VMs.
+			// It should be used for observer-type or clean-up type commands.
+			logger.Warn("GetVMs command exited with error", "error", err)
+		}
 	}
 
 	return vms, nil

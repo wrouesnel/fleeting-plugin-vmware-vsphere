@@ -62,6 +62,8 @@ type InstanceGroup struct {
 	NetInfoScript string `json:"netinfo_script"`
 	// PreShutdownScript is a command which runs just before the VM is shutdown.
 	PreShutdownScript string `json:"pre_shutdown_script"`
+	// GetVMsScript is a command which runs after the list of VMs is updated and receives currently active VMs
+	GetVMsScript string `json:"get_vms_script"`
 
 	// MaxInstances is the maximum number of instances to allow. If 0, then the default of
 	// 50 is used.
@@ -147,6 +149,10 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 
 	if g.PreShutdownScript != "" {
 		options = append(options, vsphereclient.WithPreShutdownCommand(g.PreShutdownScript))
+	}
+
+	if g.GetVMsScript != "" {
+		options = append(options, vsphereclient.WithGetVMsCommand(g.GetVMsScript))
 	}
 
 	client, err := newClient(ctx, g.VsphereUrl, g.InsecureConnection, g.Template, g.Username, g.Password, options...)

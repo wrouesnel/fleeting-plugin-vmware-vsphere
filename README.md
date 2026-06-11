@@ -133,6 +133,21 @@ Executed while the VM is still running and just before it is powered off.
 | `GOVC_VM`            | Stringified managed object reference to the cloned VM e.g. `VirtualMachine:vm-79` |
 | `TARGET_NAME`        | Name which was assigned to the virtual machine when it was started                |
 
+#### `get_vms_script`
+
+Executed whenever the Gitlab Runner polls for the list of currently active instances.
+
+This provides a useful way to hook clean up functions which might need to react to changes
+in the known or unknown list of virtual machines.
+
+Note: a non-zero exit from the script is *ignored* for this command.
+
+| Environment Variable | Description                                                                                        |
+|----------------------|----------------------------------------------------------------------------------------------------|
+| `GOVC_VMS`           | Space-separated Stringified managed object references to the cloned VM e.g. `VirtualMachine:vm-79` |
+| `TARGET_NAMES`       | Space-separated, quoted list of names of the currently active VMs.                                 |
+
+
 ## Clone Strategies
 
 ### Full Clone (default)
