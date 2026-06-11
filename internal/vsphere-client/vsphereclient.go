@@ -838,6 +838,7 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 			hookMap[k] = v
 		}
 		hookMap["GOVC_VM"] = clonedVM.Reference().String()
+		hookMap["TARGET_NAME"] = targetName
 		if err := c.postStartCommand.Run(ctx, log, hookMap); err != nil {
 			return targetName, fmt.Errorf("failed to run post-start command: %w", err)
 		}
