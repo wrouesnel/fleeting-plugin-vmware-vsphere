@@ -124,9 +124,10 @@ other systems just before the Gitlab runner takes control of the VM.
 
 Executed while the VM is still running and just before it is powered off.
 
-| Environment Variable | Description                                     |
-|----------------------|-------------------------------------------------|
+| Environment Variable | Description                                                                      |
+|----------------------|----------------------------------------------------------------------------------|
 | `GOVC_VM`            | Stringified managed object reference to the cloned VM e.g. `VirtualMachine:vm-79` |
+| `TARGET_NAME`         | Name which was assigned to the virtual machine when it was started               |
 
 ## Clone Strategies
 

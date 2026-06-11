@@ -951,6 +951,7 @@ func (c *client) deleteVM(ctx context.Context, log hclog.Logger, vmMOR types.Man
 			hookMap[k] = v
 		}
 		hookMap["GOVC_VM"] = vm.Reference().String()
+		hookMap["TARGET_NAME"] = vmName
 		if err := c.preShutdownCommand.Run(ctx, log, hookMap); err != nil {
 			return fmt.Errorf("failed to run pre-stop command: %w", err)
 		}
