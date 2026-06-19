@@ -23,33 +23,37 @@ var _ provider.InstanceGroup = (*InstanceGroup)(nil)
 var newClient = vsphereclient.NewClient
 
 type InstanceGroup struct {
-	VsphereUrl         string                  `json:"vsphere_url"`
-	Username           string                  `json:"username"`
-	Password           string                  `json:"password"`
-	Template           string                  `json:"template"`
-	Folder             string                  `json:"folder"`
-	Datacenter         string                  `json:"datacenter"`
-	Host               string                  `json:"host"`
-	Datastore          string                  `json:"datastore"`
-	ResourcePool       string                  `json:"resource_pool"`
-	InsecureConnection bool                    `json:"allow_insecure_connection"`
-	CloneType          vsphereclient.CloneType `json:"clone_type"`
-	Snapshot           string                  `json:"snapshot"`
-	Name               string                  `json:"name"`
-	CpuCount           uint64                  `json:"cpu_count"`
-	MemorySizeGb       uint64                  `json:"memory_size_gb"`
+	VsphereUrl         string `json:"vsphere_url"`
+	Username           string `json:"username"`
+	Password           string `json:"password"`
+	Template           string `json:"template"`
+	Folder             string `json:"folder"`
+	Datacenter         string `json:"datacenter"`
+	Host               string `json:"host"`
+	Datastore          string `json:"datastore"`
+	ResourcePool       string `json:"resource_pool"`
+	InsecureConnection bool   `json:"allow_insecure_connection"`
+
+	CloneType vsphereclient.CloneType `json:"clone_type"`
+
+	Snapshot string `json:"snapshot"`
+	Name     string `json:"name"`
+
+	CpuCount     uint64 `json:"cpu_count"`
+	MemorySizeGb uint64 `json:"memory_size_gb"`
 
 	// GuestRebootAfterClone applies only to instant-clones and prompts for the VM to
 	// request a guest OS reboot after cloning. This can be useful for resetting
 	// Cloud-Init.
 	GuestRebootAfterClone bool `json:"guest_reboot_after_clone"`
 	// GuestCommandAfterClone applies only to instant-clones and is executed
-	// before a reboot. It will use guest-tools to delete cloud init data from
-	// well-known locations. This effectively resets cloud-init so it will rerun
-	// properly after the boot.
+	// before network connectivity is restored.
 	GuestCommandAfterClone string `json:"guest_command_after_clone"`
-	GuestUsername          string `json:"guest_username"`
-	GuestPassword          string `json:"guest_password"`
+	// GuestCommandBeforeNetworkRestore applies only to instant-clones and is executed
+	// after network connectivity is restored but before a possible reboot.
+	GuestCommandBeforeNetworkRestore string `json:"guest_command_before_network_restore"`
+	GuestUsername                    string `json:"guest_username"`
+	GuestPassword                    string `json:"guest_password"`
 
 	// CloudInitMutationScript if defined is executed before the cloud-init
 	// configuration for a new VM is set. This happens _before_ the VM is cloned.
@@ -133,6 +137,10 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 
 	if g.GuestCommandAfterClone != "" {
 		options = append(options, vsphereclient.WithGuestCommandAfterClone(g.GuestUsername, g.GuestPassword, g.GuestCommandAfterClone))
+	}
+
+	if g.GuestCommandBeforeNetworkRestore != "" {
+		options = append(options, vsphereclient.WithGuestCommandBeforeNetworkRestore(g.GuestUsername, g.GuestPassword, g.GuestCommandBeforeNetworkRestore))
 	}
 
 	if g.CloudInitMutationScript != "" {

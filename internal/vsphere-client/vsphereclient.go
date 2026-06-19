@@ -78,8 +78,9 @@ type client struct {
 	snapshotName string
 	snapshot     *types.ManagedObjectReference
 
-	guestRebootOnClone     bool
-	guestCommandAfterClone *GuestCommand
+	guestRebootOnClone               bool
+	guestCommandAfterClone           *GuestCommand
+	guestCommandBeforeNetworkRestore *GuestCommand
 
 	cloudInitCommand   *HostCommand
 	postStartCommand   *HostCommand
@@ -325,6 +326,28 @@ func WithGuestCommandAfterClone(username string, password string, command string
 
 		// Note: no support for working directory or anything else at the moment.
 		c.guestCommandAfterClone = &GuestCommand{
+			Username: username,
+			Password: password,
+			Exe:      commands[0],
+			Args:     commands[1:],
+		}
+		return nil
+	}
+}
+
+func WithGuestCommandBeforeNetworkRestore(username string, password string, command string) ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		commands, err := shlex.Split(command)
+		if err != nil {
+			return err
+		}
+
+		if len(commands) == 0 {
+			return errors.New("guest command cannot be 0-length")
+		}
+
+		// Note: no support for working directory or anything else at the moment.
+		c.guestCommandBeforeNetworkRestore = &GuestCommand{
 			Username: username,
 			Password: password,
 			Exe:      commands[0],
@@ -685,7 +708,9 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 				// Disconnect the network device on the instant cloned VM.
 				// We must reconnect it below so it can adopt a new MAC address.
 				// For safety we also set MAC address assignment to automatic.
+				// TODO: we could make this configurable, but what is the use case?
 				veth := card.GetVirtualEthernetCard()
+				veth.Connectable.Connected = false
 				veth.Connectable.MigrateConnect = string(types.VirtualDeviceConnectInfoMigrateConnectOpDisconnect)
 				veth.AddressType = string(types.VirtualEthernetCardMacTypeGenerated)
 
@@ -789,6 +814,38 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 	// Power on the VM unless it was an instant clone (in which case it's already running)
 	switch c.cloneType {
 	case CloneTypeInstant:
+		operationsManager := guest.NewOperationsManager(c.client.Client, clonedVM.Reference())
+
+		if c.guestCommandBeforeNetworkRestore != nil {
+			processManager, err := operationsManager.ProcessManager(ctx)
+			if err != nil {
+				return targetName, fmt.Errorf("could not get process manager for VM '%s': %w", targetName, err)
+			}
+			envVars := []string{}
+			if c.guestCommandBeforeNetworkRestore.EnvVars != nil {
+				for key, value := range c.guestCommandBeforeNetworkRestore.EnvVars {
+					envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
+				}
+			}
+
+			spec := types.GuestProgramSpec{
+				ProgramPath:      c.guestCommandBeforeNetworkRestore.Exe,
+				Arguments:        strings.Join(c.guestCommandBeforeNetworkRestore.Args, " "),
+				WorkingDirectory: c.guestCommandBeforeNetworkRestore.WorkingDirectory,
+				EnvVariables:     envVars,
+			}
+			auth := types.NamePasswordAuthentication{
+				GuestAuthentication: types.GuestAuthentication{
+					InteractiveSession: false,
+				},
+				Username: c.guestCommandBeforeNetworkRestore.Username,
+				Password: c.guestCommandBeforeNetworkRestore.Password,
+			}
+			if _, err := processManager.StartProgram(ctx, &auth, &spec); err != nil {
+				return targetName, fmt.Errorf("could not run pre-network guest command for VM '%s': %w", targetName, err)
+			}
+		}
+
 		// TODO: consider providing the option to just reboot the instant clone immediately.
 		// TODO: consider moving this to it's own function
 		// The instant clone is performed by disconnecting the guest network. We must re-enable it
@@ -827,8 +884,6 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 		if err != nil {
 			return targetName, fmt.Errorf("failed to wait for VM '%s' network configuration: %w", targetName, err)
 		}
-
-		operationsManager := guest.NewOperationsManager(c.client.Client, clonedVM.Reference())
 
 		// If requested then run a guest command on the clone
 		if c.guestCommandAfterClone != nil {
