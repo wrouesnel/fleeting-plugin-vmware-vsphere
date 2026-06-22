@@ -83,6 +83,7 @@ type client struct {
 	guestCommandBeforeNetworkRestore *GuestCommand
 
 	cloudInitCommand   *HostCommand
+	preStartCommand    *HostCommand
 	postStartCommand   *HostCommand
 	netInfoCommand     *HostCommand
 	preShutdownCommand *HostCommand
@@ -405,6 +406,25 @@ func WithPreShutdownCommand(command string) ClientOption {
 			return errors.New("host command cannot be 0-length")
 		}
 		c.preShutdownCommand = &HostCommand{
+			Exe:  commands[0],
+			Args: commands[1:],
+		}
+		return nil
+	}
+}
+
+func WithPreStartCommand(command string) ClientOption {
+	return func(ctx context.Context, c *client, finder *find.Finder) error {
+		commands, err := shlex.Split(command)
+		if err != nil {
+			return err
+		}
+
+		if len(commands) == 0 {
+			return errors.New("host command cannot be 0-length")
+		}
+
+		c.preStartCommand = &HostCommand{
 			Exe:  commands[0],
 			Args: commands[1:],
 		}
@@ -810,6 +830,18 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 			}
 		}
 	}()
+
+	if c.preStartCommand != nil {
+		hookMap := map[string]string{}
+		for k, v := range c.hookCommandCommonEnv {
+			hookMap[k] = v
+		}
+		hookMap["GOVC_VM"] = clonedVM.Reference().String()
+		hookMap["TARGET_NAME"] = targetName
+		if err := c.preStartCommand.Run(ctx, log, hookMap); err != nil {
+			return targetName, fmt.Errorf("failed to run pre-start command: %w", err)
+		}
+	}
 
 	// Power on the VM unless it was an instant clone (in which case it's already running)
 	switch c.cloneType {

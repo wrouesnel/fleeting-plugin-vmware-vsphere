@@ -38,29 +38,31 @@ The plugin requires configuration for both the vSphere environment and VM connec
 
 ### Provider Configuration
 
-| Parameter                   | Type   | Required | Description                                                                    |
-|-----------------------------|--------|----------|--------------------------------------------------------------------------------|
-| `vsphere_url`               | string | Yes      | URL of the vCenter server                                                      |
-| `username`                  | string | No       | Username to access the vCenter server                                          |
-| `password`                  | string | No       | Password to access the vCenter server                                          |
-| `template`                  | string | Yes      | Path to the VM template (full clone) or VM with snapshots (linked clone)       |
-| `allow_insecure_connection` | bool   | Yes      | Whether to skip SSL certificate verification                                   |
-| `name`                      | string | Yes      | Identifier for the instance group, used as prefix for VM names                 |
-| `clone_type`                | string | Yes      | Type of clone to make (`full`,`linked` or `instant`)                           |
-| `snapshot`                  | string | No       | Snapshot name for `linked` clones. If omitted, the current snapshot is used    |
-| `folder`                    | string | No       | Destination folder where VMs will be created                                   |
-| `datacenter`                | string | No       | Datacenter where VMs will be created                                           |
-| `host`                      | string | No       | Target ESXi host for the cloned VMs                                            |
-| `datastore`                 | string | No       | Datastore where the cloned VMs will be located                                 |
-| `resource_pool`             | string | No       | Resource pool to which cloned VMs will be added                                |
-| `guest_reboot_after_clone`  | bool   | No       | Guest OS reboot immediately after instant clone operation.                     |
-| `guest_command_after_clone` | string | No       | Run a command on the guest using guest-tools after an instant clone operation. |
-| `guest_username`            | string | No       | Username to authenticate running the guest command as                          |
-| `guest_password`            | string | No       | Password to authenticate running the guest command as                          |
-| `cloudinit_mutation_script` | string | No       | Command or script to call to edit the supplied cloud-init for a new VM         |
-| `post_start_script`         | string | No       | Command or script to call after starting a new VM                              |
-| `netinfo_script`            | string | No       | Command for script to call before returning valid connect info to the runner   |
-| `pre_shutdown_script`       | string | No       | Command or script to call before shutting down new VM                          |
+| Parameter                              | Type   | Required | Description                                                                                                                |
+|----------------------------------------|--------|----------|----------------------------------------------------------------------------------------------------------------------------|
+| `vsphere_url`                          | string | Yes      | URL of the vCenter server                                                                                                  |
+| `username`                             | string | No       | Username to access the vCenter server                                                                                      |
+| `password`                             | string | No       | Password to access the vCenter server                                                                                      |
+| `template`                             | string | Yes      | Path to the VM template (full clone) or VM with snapshots (linked clone)                                                   |
+| `allow_insecure_connection`            | bool   | Yes      | Whether to skip SSL certificate verification                                                                               |
+| `name`                                 | string | Yes      | Identifier for the instance group, used as prefix for VM names                                                             |
+| `clone_type`                           | string | Yes      | Type of clone to make (`full`,`linked` or `instant`)                                                                       |
+| `snapshot`                             | string | No       | Snapshot name for `linked` clones. If omitted, the current snapshot is used                                                |
+| `folder`                               | string | No       | Destination folder where VMs will be created                                                                               |
+| `datacenter`                           | string | No       | Datacenter where VMs will be created                                                                                       |
+| `host`                                 | string | No       | Target ESXi host for the cloned VMs                                                                                        |
+| `datastore`                            | string | No       | Datastore where the cloned VMs will be located                                                                             |
+| `resource_pool`                        | string | No       | Resource pool to which cloned VMs will be added                                                                            |
+| `guest_reboot_after_clone`             | bool   | No       | Guest OS reboot immediately after instant clone operation.                                                                 |
+| `guest_command_before_network_restore` | string | No       | Run a command on the guest using guest-tools before restoring network after an instant clone operation                     |
+| `guest_command_after_clone`            | string | No       | Run a command on the guest using guest-tools after an instant clone operation.                                             |
+| `guest_username`                       | string | No       | Username to authenticate running the guest command as                                                                      |
+| `guest_password`                       | string | No       | Password to authenticate running the guest command as                                                                      |
+| `cloudinit_mutation_script`            | string | No       | Command or script to call to edit the supplied cloud-init for a new VM                                                     |
+| `pre_start_script`                      | string | No       | Command or script to call before starting a new VM after it is created. Instant clone VMs this is run pre-network restore. |
+| `post_start_script`                    | string | No       | Command or script to call after starting a new VM                                                                          |
+| `netinfo_script`                       | string | No       | Command for script to call before returning valid connect info to the runner                                               |
+| `pre_shutdown_script`                  | string | No       | Command or script to call before shutting down new VM                                                                      |
 
 If optional parameters are not specified, the plugin will attempt to use default values from the vSphere environment.
 
@@ -101,6 +103,18 @@ It is possible to make changes here which will prevent the plugin connecting to 
 |----------------------|------------------------------------------------------------------|
 | `CLOUDINIT_PATH`     | Path to a temporary file containing the YAML encoded cloud init. |
 | `TARGET_NAME`        | Name which will be assigned to the virtual machine being started |
+
+#### `pre_start_script`
+
+Executed just before the VM is started. In the case of instant cloning this is executed just before networking
+is restored. 
+
+This command will be run before any guest commands.
+
+| Environment Variable | Description                                                                       |
+|----------------------|-----------------------------------------------------------------------------------|
+| `GOVC_VM`            | Stringified managed object reference to the cloned VM e.g. `VirtualMachine:vm-79` |
+| `TARGET_NAME`        | Name which was assigned to the virtual machine when it was started                |
 
 #### `post_start_script`
 
@@ -146,7 +160,6 @@ Note: a non-zero exit from the script is *ignored* for this command.
 |----------------------|----------------------------------------------------------------------------------------------------|
 | `GOVC_VMS`           | Space-separated Stringified managed object references to the cloned VM e.g. `VirtualMachine:vm-79` |
 | `TARGET_NAMES`       | Space-separated, quoted list of names of the currently active VMs.                                 |
-
 
 ## Clone Strategies
 

@@ -58,7 +58,10 @@ type InstanceGroup struct {
 	// CloudInitMutationScript if defined is executed before the cloud-init
 	// configuration for a new VM is set. This happens _before_ the VM is cloned.
 	CloudInitMutationScript string `json:"cloud_init_mutation_script"`
-	// PostStartScript is a command which runs just after the VM is cloned and receives
+	// PreStartScript is a command which runs just after the VM is cloned and receives
+	// the MOR of the new VM.
+	PreStartScript string `json:"pre_start_script"`
+	// PostStartScript is a command which runs just after the VM is started and receives
 	// the MOR of the new VM.
 	PostStartScript string `json:"post_start_script"`
 	// NetInfoScript is a command which runs just after a VM's IP is successfully determined.
@@ -145,6 +148,10 @@ func (g *InstanceGroup) Init(ctx context.Context, logger hclog.Logger, settings 
 
 	if g.CloudInitMutationScript != "" {
 		options = append(options, vsphereclient.WithCloudInitMutationCommand(g.CloudInitMutationScript))
+	}
+
+	if g.PreStartScript != "" {
+		options = append(options, vsphereclient.WithPreStartCommand(g.PreStartScript))
 	}
 
 	if g.PostStartScript != "" {
