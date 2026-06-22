@@ -719,39 +719,50 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 		if err != nil {
 			return "", fmt.Errorf("failed to get device list of template VM: %w", err)
 		}
-		// prepare virtual device config spec for network card
+
+		// Ensure the virtual machine image is prepared for migration so interfaces will disconnect
+		// after the instant clone.
+		needsReconfig := false
 		configSpecs := []types.BaseVirtualDeviceConfigSpec{}
 		for _, device := range devices {
 			if card, ok := device.(types.BaseVirtualEthernetCard); ok {
 				op := types.VirtualDeviceConfigSpecOperationEdit
+				existingVeth := card.GetVirtualEthernetCard()
 
-				// Disconnect the network device on the instant cloned VM.
-				// We must reconnect it below so it can adopt a new MAC address.
-				// For safety we also set MAC address assignment to automatic.
-				// TODO: we could make this configurable, but what is the use case?
-				veth := card.GetVirtualEthernetCard()
-				veth.Connectable.Connected = false
-				veth.Connectable.MigrateConnect = string(types.VirtualDeviceConnectInfoMigrateConnectOpDisconnect)
-				veth.AddressType = string(types.VirtualEthernetCardMacTypeGenerated)
-				// For some reason, instant clone's don't unset DV portKey bindings, which stops the clones from
-				// working. So we need to unset them here.
-				if veth.Backing != nil {
-					switch a := veth.Backing.(type) {
-					case *types.VirtualEthernetCardDistributedVirtualPortBackingInfo:
-						a.Port.PortKey = ""
-						a.Port.ConnectionCookie = 0
-						veth.Backing = a
+				if existingVeth.Connectable.MigrateConnect != string(types.VirtualDeviceConnectInfoMigrateConnectOpDisconnect) {
+					needsReconfig = true
+					// Only edit select parameters
+					changedVeth := &types.VirtualEthernetCard{
+						VirtualDevice: types.VirtualDevice{
+							Key: existingVeth.Key,
+							Connectable: &types.VirtualDeviceConnectInfo{
+								MigrateConnect: string(types.VirtualDeviceConnectInfoMigrateConnectOpDisconnect),
+							},
+						},
+						//AddressType: string(types.VirtualEthernetCardMacTypeGenerated),
 					}
-				}
 
-				configSpecs = append(configSpecs, &types.VirtualDeviceConfigSpec{
-					Operation: op,
-					Device:    veth,
-				})
+					configSpecs = append(configSpecs, &types.VirtualDeviceConfigSpec{
+						Operation: op,
+						Device:    changedVeth,
+					})
+				}
 			}
 		}
 
-		vmLocation.DeviceChange = configSpecs
+		if needsReconfig {
+			prepareLocateSpec := &types.VirtualMachineConfigSpec{
+				DeviceChange: configSpecs,
+			}
+			if task, err := srcVM.Reconfigure(ctx, *prepareLocateSpec); err != nil {
+				return "", fmt.Errorf("failed to start reconfigure for instant clone template: %w", err)
+			} else if err := task.Wait(ctx); err != nil {
+				return "", fmt.Errorf("failed to wait for VM cloning to complete: %w", err)
+			}
+			log.Info("Reconfigured template VM interface for MigrateConnect")
+		}
+
+		// vmLocation.DeviceChange = configSpecs
 
 		instantcloneSpec := &types.VirtualMachineInstantCloneSpec{
 			Name:     targetName,
@@ -761,7 +772,6 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 			// detect it.
 			Config: config.ExtraConfig,
 		}
-
 		task, err = srcVM.InstantClone(ctx, *instantcloneSpec)
 		if err != nil {
 			return "", fmt.Errorf("failed to instant clone VM: %w", err)
@@ -806,8 +816,9 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 	}
 
 	var folderProps mo.Folder
-	// TODO: check if a useful error appears here.
-	folder.Properties(ctx, folder.Reference(), []string{"childEntity"}, &folderProps)
+	if err := folder.Properties(ctx, folder.Reference(), []string{"childEntity"}, &folderProps); err != nil {
+		return "", fmt.Errorf("could not get destination folder reference: %w", err)
+	}
 
 	var clonedVM *object.VirtualMachine
 	for _, mor := range folderProps.ChildEntity {
@@ -906,12 +917,21 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 			if card, ok := device.(types.BaseVirtualEthernetCard); ok {
 				op := types.VirtualDeviceConfigSpecOperationEdit
 				// Reconnect all network devices on the clone.
-				veth := card.GetVirtualEthernetCard()
-				veth.Connectable.Connected = true
+				existingVeth := card.GetVirtualEthernetCard()
+
+				// Only edit select parameters
+				changedVeth := &types.VirtualEthernetCard{
+					VirtualDevice: types.VirtualDevice{
+						Key: existingVeth.Key,
+						Connectable: &types.VirtualDeviceConnectInfo{
+							Connected: true,
+						},
+					},
+				}
 
 				configSpecs = append(configSpecs, &types.VirtualDeviceConfigSpec{
 					Operation: op,
-					Device:    veth,
+					Device:    changedVeth,
 				})
 			}
 		}
