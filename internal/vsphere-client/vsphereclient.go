@@ -733,6 +733,16 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 				veth.Connectable.Connected = false
 				veth.Connectable.MigrateConnect = string(types.VirtualDeviceConnectInfoMigrateConnectOpDisconnect)
 				veth.AddressType = string(types.VirtualEthernetCardMacTypeGenerated)
+				// For some reason, instant clone's don't unset DV portKey bindings, which stops the clones from
+				// working. So we need to unset them here.
+				if veth.Backing != nil {
+					switch a := veth.Backing.(type) {
+					case *types.VirtualEthernetCardDistributedVirtualPortBackingInfo:
+						a.Port.PortKey = ""
+						a.Port.ConnectionCookie = 0
+						veth.Backing = a
+					}
+				}
 
 				configSpecs = append(configSpecs, &types.VirtualDeviceConfigSpec{
 					Operation: op,
