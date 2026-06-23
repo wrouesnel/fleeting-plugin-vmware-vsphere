@@ -845,6 +845,19 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 		}
 	}()
 
+	// Instant Clones need to have their CPU and memory reconfigured after cloning since it can't
+	// be done on a live-instance.
+	if c.cloneType == CloneTypeInstant {
+		task, err = clonedVM.Reconfigure(ctx, *config)
+		if err != nil {
+			return targetName, fmt.Errorf("failed to reconfigure instant clone VM CPU and memory '%s': %w", targetName, err)
+		}
+		err = task.Wait(ctx)
+		if err != nil {
+			return targetName, fmt.Errorf("failed to wait for VM '%s' instant clone VM CPU and memory: %w", targetName, err)
+		}
+	}
+
 	if c.preStartCommand != nil {
 		hookMap := map[string]string{}
 		for k, v := range c.hookCommandCommonEnv {
@@ -899,7 +912,7 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 		// situation properly.
 		// Reference: https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere-sdks-tools/8-0/web-services-sdk-programming-guide/virtual-machine-management/linked-virtual-machines/instant-clone-virtual-machines/avoiding-network-identity-collisions-after-instant-clone-operations.html
 		var devices object.VirtualDeviceList
-		devices, err = srcVM.Device(ctx)
+		devices, err = clonedVM.Device(ctx)
 		if err != nil {
 			return "", fmt.Errorf("failed to get device list of cloned VM: '%v': %w", targetName, err)
 		}
@@ -921,11 +934,11 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 			}
 		}
 
-		task, err = clonedVM.Relocate(ctx, types.VirtualMachineRelocateSpec{
+		task, err = clonedVM.Reconfigure(ctx, types.VirtualMachineConfigSpec{
 			DeviceChange: configSpecs,
-		}, types.VirtualMachineMovePriorityDefaultPriority)
+		})
 		if err != nil {
-			return targetName, fmt.Errorf("failed to relocate VM to re-enable network '%s': %w", targetName, err)
+			return targetName, fmt.Errorf("failed to reconfigure VM to re-enable network '%s': %w", targetName, err)
 		}
 		err = task.Wait(ctx)
 		if err != nil {
@@ -1087,7 +1100,7 @@ func (c *client) powerOffVM(ctx context.Context, vmMOR types.ManagedObjectRefere
 
 func (c *client) deleteVM(ctx context.Context, log hclog.Logger, vmMOR types.ManagedObjectReference, vmName string) error {
 	vm := object.NewVirtualMachine(c.client.Client, vmMOR)
-	log = log.With("targetName", vm.Name())
+	log = log.With("targetName", vmName)
 
 	if c.preShutdownCommand != nil {
 		hookMap := map[string]string{}
