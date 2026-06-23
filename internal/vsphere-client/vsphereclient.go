@@ -722,47 +722,40 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 
 		// Ensure the virtual machine image is prepared for migration so interfaces will disconnect
 		// after the instant clone.
-		needsReconfig := false
 		configSpecs := []types.BaseVirtualDeviceConfigSpec{}
+
+		// Important: behind the scenes govmomi is speaking XML SOAP which has a number of hidden
+		// type fields which carry along with the data. So what looks like an equivalent interface
+		// structure is not. The way the code here is written is *vital* to allowing the clone
+		// operation to succeed and was extremely non-obvious to debug.
+
 		for _, device := range devices {
-			if card, ok := device.(types.BaseVirtualEthernetCard); ok {
+			if veth, ok := device.(types.BaseVirtualEthernetCard); ok {
 				op := types.VirtualDeviceConfigSpecOperationEdit
-				existingVeth := card.GetVirtualEthernetCard()
 
-				if existingVeth.Connectable.MigrateConnect != string(types.VirtualDeviceConnectInfoMigrateConnectOpDisconnect) {
-					needsReconfig = true
-					// Only edit select parameters
-					changedVeth := &types.VirtualEthernetCard{
-						VirtualDevice: types.VirtualDevice{
-							Key: existingVeth.Key,
-							Connectable: &types.VirtualDeviceConnectInfo{
-								MigrateConnect: string(types.VirtualDeviceConnectInfoMigrateConnectOpDisconnect),
-							},
-						},
-						//AddressType: string(types.VirtualEthernetCardMacTypeGenerated),
-					}
-
-					configSpecs = append(configSpecs, &types.VirtualDeviceConfigSpec{
-						Operation: op,
-						Device:    changedVeth,
-					})
+				card := veth.GetVirtualEthernetCard()
+				// If the veth is on a distributed backing then we need to reset the port key parameter to allow
+				// the clone to succeed.
+				if vethDvp, ok := card.Backing.(*types.VirtualEthernetCardDistributedVirtualPortBackingInfo); ok {
+					vethDvp.Port.PortKey = ""
+					vethDvp.Port.ConnectionCookie = 0
 				}
+				// Ensure the VM is disconnected after the clone
+				card.Connectable.Connected = false
+				card.Connectable.MigrateConnect = string(types.VirtualDeviceConnectInfoMigrateConnectOpDisconnect)
+				// Ensure a new MAC address is generated
+				card.AddressType = string(types.VirtualEthernetCardMacTypeGenerated)
+
+				// IMPORTANT: We have edited "card" above - we must put **device** in the changed spec so the correct
+				// types go into the request.
+				configSpecs = append(configSpecs, &types.VirtualDeviceConfigSpec{
+					Operation: op,
+					Device:    device,
+				})
 			}
 		}
 
-		if needsReconfig {
-			prepareLocateSpec := &types.VirtualMachineConfigSpec{
-				DeviceChange: configSpecs,
-			}
-			if task, err := srcVM.Reconfigure(ctx, *prepareLocateSpec); err != nil {
-				return "", fmt.Errorf("failed to start reconfigure for instant clone template: %w", err)
-			} else if err := task.Wait(ctx); err != nil {
-				return "", fmt.Errorf("failed to wait for VM cloning to complete: %w", err)
-			}
-			log.Info("Reconfigured template VM interface for MigrateConnect")
-		}
-
-		// vmLocation.DeviceChange = configSpecs
+		vmLocation.DeviceChange = configSpecs
 
 		instantcloneSpec := &types.VirtualMachineInstantCloneSpec{
 			Name:     targetName,
@@ -917,21 +910,13 @@ func (c *client) templateClone(ctx context.Context, log hclog.Logger, src types.
 			if card, ok := device.(types.BaseVirtualEthernetCard); ok {
 				op := types.VirtualDeviceConfigSpecOperationEdit
 				// Reconnect all network devices on the clone.
-				existingVeth := card.GetVirtualEthernetCard()
-
-				// Only edit select parameters
-				changedVeth := &types.VirtualEthernetCard{
-					VirtualDevice: types.VirtualDevice{
-						Key: existingVeth.Key,
-						Connectable: &types.VirtualDeviceConnectInfo{
-							Connected: true,
-						},
-					},
-				}
-
+				card := card.GetVirtualEthernetCard()
+				card.Connectable.Connected = true
+				// IMPORTANT: We have edited "card" above - we must put **device** in the changed spec so the correct
+				// types go into the request.
 				configSpecs = append(configSpecs, &types.VirtualDeviceConfigSpec{
 					Operation: op,
-					Device:    changedVeth,
+					Device:    device,
 				})
 			}
 		}
